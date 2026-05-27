@@ -25,7 +25,7 @@ jobs:
     - name: 执行监控脚本并发送邮件
       env:
         # 从 GitHub 保险箱中自动读取隐私密钥
-        GITHUB_AI_KEY: ${{ secrets.GITHUB_AI_KEY }}
+        AI_KEY: ${{ secrets.AI_KEY }}
         SMTP_USER: ${{ secrets.SMTP_USER }}
         SMTP_PASS: ${{ secrets.SMTP_PASS }}
         RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
