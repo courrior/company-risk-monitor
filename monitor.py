@@ -150,9 +150,9 @@ def send_email(html_content, total_count, risk_count):
         print(f"邮件发送失败: {e}")
 
 def main():
-    api_key = os.environ.get("GITHUB_AI_KEY")
+    api_key = os.environ.get("AI_KEY")
     if not api_key:
-        print("错误：未配置 GITHUB_AI_KEY")
+        print("错误：未配置 AI_KEY")
         return
         
     results = []
@@ -207,7 +207,7 @@ def main():
     """
     
     for idx, item in enumerate(results, 1):
-        status_str = "未发现风险信息" if item["is_safe"] else "⚠️ 发现潜在风险/变动"
+        status_str = "未发现风险信息" if item["is_safe"] else "发现潜在风险/变动"
         status_class = "risk-no" if item["is_safe"] else "risk-yes"
         html_body += f"""
                 <tr>
