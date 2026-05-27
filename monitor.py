@@ -7,8 +7,6 @@ import feedparser
 import requests
 
 # ==================== 【企业名单配置区】 ====================
-# 请在这里输入你的两列名单。name 填企业名称，group 填所属集团。
-# 以后想要增减，直接模仿下面的格式复制或删减行即可。
 COMPANIES = [
     {"name": "北京海博思创科技股份有限公司", "group": ""},
     {"name": "沧州富力城房地产开发有限公司", "group": "广州富力地产股份有限公司"},
@@ -55,15 +53,11 @@ COMPANIES = [
 ]
 # ============================================================
 
-# GitHub 官方免费模型 API 地址与模型选择
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
-MODEL_NAME = "meta-llama-3-8b-instruct"  # GitHub Marketplace 提供的王牌开源大模型
-
+MODEL_NAME = "gpt-4o-mini"  
 def fetch_news(company_name, group_name):
-    """利用 Google News RSS 联合抓取企业公开信息（已兼容集团名称为空的情况）"""
+    """利用 Google News RSS 联合抓取企业公开信息"""
     keywords = "(风险 OR 诉讼 OR 处罚 OR 违规 OR 财务 OR 执行 OR 舆情)"
-    
-    # 如果有集团名称，用 OR 组合；如果没有，只查企业名称
     if group_name and group_name.strip():
         query = f"({company_name} OR {group_name}) {keywords} when:1d" 
     else:
@@ -92,12 +86,11 @@ def analyze_with_llm(company_name, group_name, raw_text, api_key):
         "Content-Type": "application/json"
     }
     
-    # 核心修改：在提示词中明确告知大模型母子公司关系，帮助AI更精准地识别主体
     prompt = (
-        f"你是一个专业的企业风控合规专家。请对以下关于【所属集团：{group_name} | 企业名称：{company_name}】在过去24小时内的网络搜索结果进行深度清洗与提炼。\n\n"
+        f"你是一个专业的企业风控合规专家。请对以下关于【所属集团：{group_name if group_name else '无'} | 企业名称：{company_name}】在过去24小时内的网络搜索结果进行深度清洗与提炼。\n\n"
         f"【原始搜索数据】:\n{raw_text}\n\n"
-        "【⚠️ 铁律指令 - 必须严格执行】:\n"
-        "1. 防幻觉铁律：你只能且必须完全基于上方提供的【原始搜索数据】内容进行提炼。绝对不允许编造、猜测、臆断任何不存在的日期、金额、罪名、受罚原因或事件细节！如果原文语焉不详，宁可不写，也绝不能凭空想象。\n"
+        "【铁律指令 - 必须严格执行】:\n"
+        "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始搜索数据】内容进行提炼。绝对不允许编造、猜测、臆断任何不存在的日期、金额、罪名、受罚原因或事件细节！如果原文语焉不详，宁可不写，也绝不能凭空想象。\n"
         "2. 必须去除所有广告、无关推广、重复内容和陈旧历史信息（非过去24小时内的新闻）。\n"
         "3. 仅保留真实的、属于过去24小时内的风险信息（包括但不限于：财务危机、高管变动、负面舆情、诉讼纠纷、被执行、行政处罚、违规行为等）。\n"
         "4. 如果发现相关风险，请以清晰的列表形式、逐个详细说明事件的时间、起因和结果。\n"
@@ -110,13 +103,19 @@ def analyze_with_llm(company_name, group_name, raw_text, api_key):
             {"role": "system", "content": "你是一个严格遵守字数和真实性指令的AI助手。"},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.1  # 降到最低，彻底封杀AI的创造力和幻觉
+        "temperature": 0.1
     }
     
     try:
         response = requests.post(API_URL, json=data, headers=headers)
         if response.status_code == 200:
-            return response.json()['choices'][0]['message']['content'].strip()
+            res_json = response.json()
+            # 🛡️ 防御性排查：确保返回的数据里确实包含 choices 键，防止接口抽风导致脚本卡死
+            if 'choices' in res_json and len(res_json['choices']) > 0:
+                return res_json['choices'][0]['message']['content'].strip()
+            else:
+                print(f"警告：AI接口返回了异常格式: {res_json}")
+                return "分析失败（接口未返回有效回答）"
         else:
             return f"分析失败（API状态码:{response.status_code}）"
     except Exception as e:
@@ -124,7 +123,7 @@ def analyze_with_llm(company_name, group_name, raw_text, api_key):
 
 def send_email(html_content, total_count, risk_count):
     """通过 SMTP 发送 HTML 格式的精美邮件"""
-    smtp_server = os.environ.get("SMTP_SERVER", "smtp.qq.com")  # 默认QQ邮箱
+    smtp_server = os.environ.get("SMTP_SERVER", "smtp.qq.com")
     smtp_port = 465
     sender_user = os.environ.get("SMTP_USER")
     sender_pass = os.environ.get("SMTP_PASS")
@@ -163,7 +162,7 @@ def main():
     for item in COMPANIES:
         comp_name = item["name"]
         group_name = item["group"]
-        print(f"正在分析: {group_name} -> {comp_name}")
+        print(f"正在分析: {group_name if group_name else '独立企业'} -> {comp_name}")
         
         raw_text = fetch_news(comp_name, group_name)
         analysis = analyze_with_llm(comp_name, group_name, raw_text, api_key)
@@ -174,12 +173,11 @@ def main():
             
         results.append({
             "name": comp_name,
-            "group": group_name,
+            "group": group_name if group_name else "—",
             "analysis": analysis,
             "is_safe": is_safe
         })
             
-    # 构造 HTML 邮件前端样式表格（核心修改：新增“所属集团”列）
     html_body = f"""
     <html>
     <head>
@@ -189,15 +187,15 @@ def main():
             table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
             th, td {{ border: 1px solid #e0e0e0; padding: 12px; text-align: left; }}
             th {{ background-color: #f5f5f5; font-weight: bold; }}
-            .risk-yes {{ color: #d9534f; font-weight: bold; }}
             .risk-no {{ color: #5cb85c; font-weight: bold; }}
+            .risk-yes {{ color: #d9534f; font-weight: bold; }}
             .detail-block {{ background-color: #fff9f9; padding: 15px; border-left: 4px solid #d9534f; margin-bottom: 15px; border-radius: 0 4px 4px 0; }}
             h2 {{ color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h2>📊 每日企业风险监控整体汇总表</h2>
+            <h2>每日企业风险监控整体汇总表</h2>
             <p style="color:#666;">数据统计周期：过去24小时公开信息 | 执行时间：北京时间 07:30</p>
             <table>
                 <tr>
@@ -223,7 +221,7 @@ def main():
     html_body += """
             </table>
             <br/>
-            <h2>🔍 企业风险详细说明列表</h2>
+            <h2>企业风险详细说明列表</h2>
     """
     
     has_risk_detail = False
@@ -233,13 +231,13 @@ def main():
             formatted_res = item["analysis"].replace("\n", "<br/>")
             html_body += f"""
                 <div class="detail-block">
-                    <h3 style="color:#c9302c; margin-top:0;">⚠️ {item["group"]} - {item["name"]}</h3>
+                    <h3 style="color:#c9302c; margin-top:0;"> {item["group"]} - {item["name"]}</h3>
                     <p style="line-height:1.6; color:#444;">{formatted_res}</p>
                 </div>
             """
             
     if not has_risk_detail:
-        html_body += "<p style='color: #5cb85c; font-size: 15px;'><b>✨ 今日所有监控企业均【未发现风险信息】。</b></p>"
+        html_body += "<p style='color: #5cb85c; font-size: 15px;'><b>今日所有监控企业均【未发现风险信息】。</b></p>"
         
     html_body += """
         </div>
