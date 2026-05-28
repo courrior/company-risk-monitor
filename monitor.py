@@ -60,9 +60,9 @@ def fetch_news(company_name, group_name):
     """利用 Google News RSS 联合抓取企业公开信息"""
     keywords = "(风险 OR 诉讼 OR 处罚 OR 违规 OR 财务 OR 执行 OR 舆情)"
     if group_name and group_name.strip():
-        query = f"({company_name} OR {group_name}) {keywords} when:1d" 
+        query = f"({company_name} OR {group_name}) {keywords} when:90d" 
     else:
-        query = f"{company_name} {keywords} when:1d"
+        query = f"{company_name} {keywords} when:90d"
         
     encoded_query = urllib.parse.quote(query)
     url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
@@ -88,12 +88,12 @@ def analyze_with_llm(company_name, group_name, raw_text, api_key):
     }
     
     prompt = (
-        f"你是一个专业的企业风控合规专家。请对以下关于【所属集团：{group_name if group_name else '无'} | 企业名称：{company_name}】在过去24小时内的网络搜索结果进行深度清洗与提炼。\n\n"
+        f"你是一个专业的企业风控合规专家。请对以下关于【所属集团：{group_name if group_name else '无'} | 企业名称：{company_name}】在过去3个月内的网络搜索结果进行深度清洗与提炼。\n\n"
         f"【原始搜索数据】:\n{raw_text}\n\n"
         "【铁律指令 - 必须严格执行】:\n"
         "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始搜索数据】内容进行提炼。绝对不允许编造、猜测、臆断任何不存在的日期、金额、罪名、受罚原因或事件细节！如果原文语焉不详，宁可不写，也绝不能凭空想象。\n"
-        "2. 必须去除所有广告、无关推广、重复内容和陈旧历史信息（非过去24小时内的新闻）。\n"
-        "3. 仅保留真实的、属于过去24小时内的风险信息（包括但不限于：财务危机、高管变动、负面舆情、诉讼纠纷、被执行、行政处罚、违规行为等）。\n"
+        "2. 必须去除所有广告、无关推广、重复内容和陈旧历史信息（非过去3个月内的新闻）。\n"
+        "3. 仅保留真实的、属于过去3个月内的风险信息（包括但不限于：财务危机、高管变动、负面舆情、诉讼纠纷、被执行、行政处罚、违规行为等）。\n"
         "4. 如果发现相关风险，请以清晰的列表形式、逐个详细说明事件的时间、起因和结果。\n"
         "5. 如果没有任何相关的风险或上述变动信息（或者搜索到的内容纯属无关推广），请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号、解释或多余的文字。"
     )
