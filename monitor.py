@@ -10,27 +10,27 @@ from datetime import datetime, timedelta, timezone
 # ==================== 【企业名单配置区】 ====================
 COMPANIES = [
     {"name": "海博思创", "group": ""},
-    {"name": "富力城", "group": "富力地产"},
+    {"name": "富力城", "group": "富力"},
     {"name": "盛钰", "group": "荣盛"},
-    {"name": "旭阳化工", "group": "旭阳集团"},
+    {"name": "旭阳化工", "group": "旭阳"},
     {"name": "中铁装备", "group": "新华联合冶金"},
-    {"name": "承德建龙", "group": "建龙重工"},
-    {"name": "燕北冶金", "group": "北京建龙"},
+    {"name": "承德建龙", "group": "建龙"},
+    {"name": "燕北冶金", "group": "建龙"},
     {"name": "海伟石化", "group": ""},
     {"name": "正大制管", "group": "正大制管"},
-    {"name": "诚实实业", "group": "诚实实业"},
-    {"name": "华荣制药", "group": "石药控股"},
-    {"name": "敬业高品钢", "group": "敬业集团"},
-    {"name": "敬业宽板", "group": "敬业集团"},
-    {"name": "千喜鹤饮食", "group": "千喜鹤饮食"},
+    {"name": "诚实实业", "group": "诚实"},
+    {"name": "华荣制药", "group": "石药"},
+    {"name": "敬业高品钢", "group": "敬业"},
+    {"name": "敬业宽板", "group": "敬业"},
+    {"name": "千喜鹤饮食", "group": "千喜鹤"},
     {"name": "新武安钢铁", "group": "普阳钢铁"},
-    {"name": "旭阳能源", "group": "旭阳集团"},
+    {"name": "旭阳能源", "group": "旭阳"},
     {"name": "华夏幸福基业控股", "group": "华夏幸福"},
     {"name": "今麦郎饮品", "group": "今麦郎"},
-    {"name": "敬业钢铁", "group": "敬业集团"},
-    {"name": "铭顺石油天然气", "group": "铭顺石油天然气"},
+    {"name": "敬业钢铁", "group": "敬业"},
+    {"name": "铭顺石油天然气", "group": "铭顺"},
     {"name": "廊坊市天然气", "group": "廊坊市天然气"},
-    {"name": "翔福新能源", "group": "旭阳集团"},
+    {"name": "翔福新能源", "group": "旭阳"},
     {"name": "迁安正大", "group": "正大制管"},
     {"name": "荣盛房地产", "group": "荣盛"},
     {"name": "三河汇福粮油集团精炼植物油", "group": "三河汇福"},
@@ -38,8 +38,8 @@ COMPANIES = [
     {"name": "班公措", "group": ""},
     {"name": "创齐贸易", "group": ""},
     {"name": "万丰制管", "group": ""},
-    {"name": "格萨贸易", "group": "格萨贸易"},
-    {"name": "旭阳化工", "group": "旭阳集团"},
+    {"name": "格萨贸易", "group": "格萨"},
+    {"name": "旭阳化工", "group": "旭阳"},
     {"name": "津衡石油化工", "group": ""},
     {"name": "武安市裕华钢铁", "group": "冀南钢铁"},
     {"name": "澳森金属", "group": "澳森特钢"},
@@ -57,7 +57,7 @@ COMPANIES = [
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
 MODEL_NAME = "gpt-4o-mini"  
 def fetch_news(company_name, group_name):
-    """利用 Google News RSS 联合抓取企业公开信息"""
+    """利用 Google News RSS 联合抓取企业公开信息，并带上新闻发布时间"""
     keywords = "(风险 OR 诉讼 OR 处罚 OR 违规 OR 财务 OR 执行 OR 舆情)"
     if group_name and group_name.strip():
         query = f"({company_name} OR {group_name}) {keywords} when:30d" 
@@ -70,18 +70,21 @@ def fetch_news(company_name, group_name):
     try:
         feed = feedparser.parse(url)
         articles = []
-
+        
         print(f"   [调试信息] '{company_name}' 原始抓取到新闻条数: {len(feed.entries)} 条")
         
         for entry in feed.entries[:15]:
-            articles.append(f"标题: {entry.title}\n摘要: {entry.get('summary', '无')}\n---")
+            # 🛡️ 【升级点】：提取新闻在互联网上的标准发布时间
+            pub_date = entry.get('published', '未知发布时间')
+            articles.append(f"【媒体发布时间】: {pub_date}\n标题: {entry.title}\n摘要: {entry.get('summary', '无')}\n---")
+            
         return "\n".join(articles)
     except Exception as e:
         print(f"抓取 {group_name}-{company_name} 失败: {e}")
         return ""
 
 def analyze_with_llm(company_name, group_name, raw_text, api_key):
-    """调用 GitHub 免费大模型进行提炼分析，严格执行防幻觉铁律"""
+    """调用大模型进行双时间维度的深度清洗与提炼"""
     if not raw_text.strip():
         return "未发现风险信息"
         
@@ -90,21 +93,26 @@ def analyze_with_llm(company_name, group_name, raw_text, api_key):
         "Content-Type": "application/json"
     }
     
+    # 🛡️ 【升级点】：在 Prompt 模版中死磕双时间格式
     prompt = (
-        f"你是一个专业的企业风控合规专家。请对以下关于【所属集团：{group_name if group_name else '无'} | 企业名称：{company_name}】在过去1个月内的网络搜索结果进行深度清洗与提炼。\n\n"
+        f"你是一个专业的企业风控合规专家。请对以下关于【所属集团：{group_name if group_name else '无'} | 企业名称：{company_name}】的网络搜索结果进行深度清洗与提炼。\n\n"
         f"【原始搜索数据】:\n{raw_text}\n\n"
         "【铁律指令 - 必须严格执行】:\n"
-        "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始搜索数据】内容进行提炼。绝对不允许编造、猜测、臆断任何不存在的日期、金额、罪名、受罚原因或事件细节！如果原文语焉不详，宁可不写，也绝不能凭空想象。\n"
-        "2. 必须去除所有广告、无关推广、重复内容和陈旧历史信息（非过去1个月内的新闻）。\n"
-        "3. 仅保留真实的、属于过去1个月内的风险信息（包括但不限于：财务危机、高管变动、负面舆情、诉讼纠纷、被执行、行政处罚、违规行为等）。\n"
-        "4. 如果发现相关风险，请以清晰的列表形式、逐个详细说明事件的时间、起因和结果。\n"
-        "5. 如果没有任何相关的风险或上述变动信息（或者搜索到的内容纯属无关推广），请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号、解释或多余的文字。"
+        "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始搜索数据】内容进行提炼。绝对不允许编造任何不存在的细节！\n"
+        "2. 必须去除所有广告、无关推广和陈旧重复信息。\n"
+        "3. 仅保留真实的、近期的风险信息（包括但不限于：财务危机、高管变动、负面舆情、诉讼纠纷、被执行、行政处罚、退市警告等）。\n"
+        "4. 如果发现相关风险，请以清晰的列表形式、逐个详细说明。每一条风险必须严格包含以下4个子字段，不得合并或缺失：\n"
+        "   - **信息公布时间**: [从原始数据的【媒体发布时间】或正文中提取的新闻曝光时间]\n"
+        "   - **风险实际发生时间**: [事件真正发生的年份/月份，或财务数据所属的报告期，如2025年度]\n"
+        "   - **起因**: [导致该风险的具体行为、事件或财务数据细节]\n"
+        "   - **结果**: [该事件引发的直接后果、法律责任或市场变动]\n"
+        "5. 如果没有任何相关的风险或上述变动信息，请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号、解释或多余的文字。"
     )
     
     data = {
         "model": MODEL_NAME,
         "messages": [
-            {"role": "system", "content": "你是一个严格遵守字数和真实性指令的AI助手。"},
+            {"role": "system", "content": "你是一个严格遵守字段格式和真实性指令的AI风控助手。"},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.1
@@ -114,11 +122,9 @@ def analyze_with_llm(company_name, group_name, raw_text, api_key):
         response = requests.post(API_URL, json=data, headers=headers)
         if response.status_code == 200:
             res_json = response.json()
-            # 🛡️ 防御性排查：确保返回的数据里确实包含 choices 键，防止接口抽风导致脚本卡死
             if 'choices' in res_json and len(res_json['choices']) > 0:
                 return res_json['choices'][0]['message']['content'].strip()
             else:
-                print(f"警告：AI接口返回了异常格式: {res_json}")
                 return "分析失败（接口未返回有效回答）"
         else:
             return f"分析失败（API状态码:{response.status_code}）"
