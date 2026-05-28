@@ -6,65 +6,67 @@ import urllib.parse
 import feedparser
 import requests
 from datetime import datetime, timedelta, timezone
-import time
+import time  # 🛡️ 严格控制请求频率，消灭接口限流
 
-
+# ==================== 【企业名单配置区（已升级四元解耦结构）】 ====================
+# name/group 用于后台模糊搜索（高召回防漏）；full_name/group_full 用于邮件规范显示（正式严谨）
 COMPANIES = [
-    {"name": "海博思创", "group": ""},
-    {"name": "富力城", "group": "富力"},
-    {"name": "盛钰", "group": "荣盛"},
-    {"name": "旭阳化工", "group": "旭阳"},
-    {"name": "中铁装备", "group": "新华联合冶金"},
-    {"name": "承德建龙", "group": "建龙"},
-    {"name": "燕北冶金", "group": "建龙"},
-    {"name": "海伟石化", "group": ""},
-    {"name": "正大制管", "group": "正大制管"},
-    {"name": "诚实实业", "group": "诚实"},
-    {"name": "华荣制药", "group": "石药"},
-    {"name": "敬业高品钢", "group": "敬业"},
-    {"name": "敬业宽板", "group": "敬业"},
-    {"name": "千喜鹤饮食", "group": "千喜鹤"},
-    {"name": "新武安钢铁", "group": "普阳钢铁"},
-    {"name": "旭阳能源", "group": "旭阳"},
-    {"name": "华夏幸福基业控股", "group": "华夏幸福"},
-    {"name": "今麦郎饮品", "group": "今麦郎"},
-    {"name": "敬业钢铁", "group": "敬业"},
-    {"name": "铭顺石油天然气", "group": "铭顺"},
-    {"name": "廊坊市天然气", "group": "廊坊市天然气"},
-    {"name": "翔福新能源", "group": "旭阳"},
-    {"name": "迁安正大", "group": "正大制管"},
-    {"name": "荣盛房地产", "group": "荣盛"},
-    {"name": "三河汇福粮油集团精炼植物油", "group": "三河汇福"},
-    {"name": "恩必普", "group": "石药"},
-    {"name": "班公措", "group": ""},
-    {"name": "创齐贸易", "group": ""},
-    {"name": "万丰制管", "group": ""},
-    {"name": "格萨贸易", "group": "格萨"},
-    {"name": "旭阳化工", "group": "旭阳"},
-    {"name": "津衡石油化工", "group": ""},
-    {"name": "武安市裕华钢铁", "group": "冀南钢铁"},
-    {"name": "澳森金属", "group": "澳森特钢"},
-    {"name": "澳森特钢", "group": "澳森特钢"},
-    {"name": "泽明国际", "group": ""},
-    {"name": "新奥控股", "group": "廊坊市天然气"},
-    {"name": "新奥能源", "group": "廊坊市天然气"},
-    {"name": "银盾云", "group": "润泽"},
-    {"name": "正大(天津)供应链", "group": "正大制管"},
-    {"name": "知合", "group": "华夏幸福"},
-    {"name": "中海外", "group": ""}
+    {"name": "海博思创", "full_name": "北京海博思创科技股份有限公司", "group": "", "group_full": "—"},
+    {"name": "富力城", "full_name": "沧州富力城房地产开发有限公司", "group": "富力", "group_full": "广州富力地产股份有限公司"},
+    {"name": "盛钰", "full_name": "沧州盛钰房地产开发有限公司", "group": "荣盛", "group_full": "荣盛控股股份有限公司"},
+    {"name": "旭阳化工", "full_name": "沧州旭阳化工有限公司", "group": "旭阳", "group_full": "旭阳集团有限公司"},
+    {"name": "中铁装备", "full_name": "沧州中铁装备制造材料有限公司", "group": "新华联合冶金", "group_full": "河北新华联合冶金控股集团有限公司"},
+    {"name": "承德建龙", "full_name": "承德建龙特殊钢有限公司", "group": "建龙", "group_full": "北京建龙重工集团有限公司"},
+    {"name": "燕北冶金", "full_name": "承德燕北冶金材料有限公司", "group": "建龙", "group_full": "北京建龙重工集团有限公司"},
+    {"name": "海伟石化", "full_name": "海伟石化有限公司", "group": "", "group_full": "—"},
+    {"name": "正大制管", "full_name": "邯郸正大制管集团股份有限公司", "group": "正大制管", "group_full": "邯郸正大制管集团股份有限公司"},
+    {"name": "诚实实业", "full_name": "河北诚实实业集团有限公司", "group": "诚实", "group_full": "河北诚实实业集团有限公司"},
+    {"name": "华荣制药", "full_name": "河北华荣制药有限公司", "group": "石药", "group_full": "石药控股集团有限公司"},
+    {"name": "敬业高品钢", "full_name": "河北敬业高品钢科技有限公司", "group": "敬业", "group_full": "敬业集团有限公司"},
+    {"name": "河北敬业宽板科技有限公司", "group": "敬业", "full_name": "乌兰浩特钢铁有限责任公司宽厚板厂", "group_full": "敬业集团有限公司"},
+    {"name": "千喜鹤饮食", "full_name": "河北千喜鹤饮食股份有限公司", "group": "千喜鹤", "group_full": "河北千喜鹤饮食股份有限公司"},
+    {"name": "新武安钢铁", "full_name": "河北新武安钢铁集团烘熔钢铁有限公司", "group": "普阳钢铁", "group_full": "河北普阳钢铁有限公司"},
+    {"name": "旭阳能源", "full_name": "河北旭阳能源有限公司", "group": "旭阳", "group_full": "旭阳集团有限公司"},
+    {"name": "华夏幸福基业控股", "full_name": "华夏幸福基业控股股份公司", "group": "华夏幸福", "group_full": "华夏幸福基业股份有限公司"},
+    {"name": "今麦郎饮品", "full_name": "今麦郎饮品股份有限公司", "group": "今麦郎", "group_full": "今麦郎投资有限公司"},
+    {"name": "敬业钢铁", "full_name": "敬业钢铁有限公司", "group": "敬业", "group_full": "敬业集团有限公司"},
+    {"name": "铭顺石油天然气", "full_name": "廊坊市铭顺石油天然气销售有限公司", "group": "铭顺", "group_full": "廊坊市铭顺石油天然气销售有限公司"},
+    {"name": "廊坊市天然气", "full_name": "廊坊市天然气有限公司", "group": "廊坊市天然气", "group_full": "廊坊市天然气有限公司"},
+    {"name": "翔福新能源", "full_name": "内蒙古翔福新能源有限责任公司", "group": "旭阳", "group_full": "旭阳集团有限公司"},
+    {"name": "迁安正大", "full_name": "迁安正大通用钢管有限公司", "group": "正大制管", "group_full": "邯郸正大制管集团股份有限公司"},
+    {"name": "荣盛房地产", "full_name": "荣盛房地产发展股份有限公司", "group": "荣盛", "group_full": "荣盛控股股份有限公司"},
+    {"name": "三河汇福粮油集团精炼植物油", "full_name": "三河汇福粮油集团精炼植物油有限公司", "group": "三河汇福", "group_full": "三河汇福粮油集团有限公司"},
+    {"name": "恩必普", "full_name": "石药集团恩必普药业有限公司", "group": "石药", "group_full": "石药控股集团有限公司"},
+    {"name": "班公措", "full_name": "唐山班公措新材料有限公司", "group": "", "group_full": "—"},
+    {"name": "创齐贸易", "full_name": "唐山创齐贸易有限公司", "group": "", "group_full": "—"},
+    {"name": "万丰制管", "full_name": "唐山市丰南区万丰制管有限公司", "group": "", "group_full": "—"},
+    {"name": "格萨贸易", "full_name": "唐山市格萨贸易有限公司", "group": "格萨", "group_full": "唐山市格萨贸易有限公司"},
+    {"name": "旭阳化工", "full_name": "唐山旭阳化工有限公司", "group": "旭阳", "group_full": "旭阳集团有限公司"},
+    {"name": "津衡石油化工", "full_name": "天津津衡石油化工贸易有限责任公司", "group": "", "group_full": "—"},
+    {"name": "武安市裕华钢铁", "full_name": "武安市裕华钢铁有限公司", "group": "冀南钢铁", "group_full": "冀南钢铁集团有限公司"},
+    {"name": "澳森金属", "full_name": "辛集市澳森金属制品有限公司", "group": "澳森特钢", "group_full": "辛集市澳森特钢集团有限公司"},
+    {"name": "澳森特钢", "full_name": "辛集市澳森特钢集团有限公司", "group": "澳森特钢", "group_full": "辛集市澳森特钢集团有限公司"},
+    {"name": "泽明国际", "full_name": "辛集市泽明国际贸易有限公司", "group": "", "group_full": "—"},
+    {"name": "新奥控股", "full_name": "新奥控股投资股份有限公司", "group": "廊坊市天然气", "group_full": "廊坊市天然气有限公司"},
+    {"name": "新奥能源", "full_name": "新奥能源供应链有限公司", "group": "廊坊市天然气", "group_full": "廊坊市天然气有限公司"},
+    {"name": "银盾云", "full_name": "浙江银盾云科技有限公司", "group": "润泽", "group_full": "京津冀润泽（廊坊）数字信息有限公司"},
+    {"name": "正大供应链", "full_name": "正大(天津)供应链有限公司", "group": "正大制管", "group_full": "邯郸正大制管集团股份有限公司"},
+    {"name": "知合", "full_name": "知合控股有限公司", "group": "华夏幸福", "group_full": "华夏幸福基业股份有限公司"},
+    {"name": "中海外", "full_name": "中海外交通建设有限公司", "group": "", "group_full": "—"}
 ]
+# ==================================================================================
 
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
 MODEL_NAME = "gpt-4o-mini"  
 
-def fetch_news(company_name, group_name):
-    """利用 Google News RSS 抓取信息，扩充关键风险词并开启全量扫描防漏报"""
+def fetch_news(company_short, group_short):
+    """利用 简称 进行大网全量、高召回率抓取，防漏报"""
     keywords = "(风险 OR 诉讼 OR 处罚 OR 违规 OR 财务 OR 执行 OR 舆情 OR 通报 OR 督察 OR 点名 OR 查处 OR 立案 OR 被罚)"
     
-    if group_name and group_name.strip():
-        query = f"({company_name} OR {group_name}) {keywords} when:30d" 
+    if group_short and group_short.strip():
+        query = f"({company_short} OR {group_short}) {keywords} when:15d" 
     else:
-        query = f"{company_name} {keywords} when:30d"
+        query = f"{company_short} {keywords} when:15d"
         
     encoded_query = urllib.parse.quote(query)
     url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
@@ -72,9 +74,9 @@ def fetch_news(company_name, group_name):
     try:
         feed = feedparser.parse(url)
         articles = []
-        seen_titles = set() 
+        seen_titles = set()  
         
-        print(f"   [调试信息] '{company_name}' 原始抓取到新闻总条数: {len(feed.entries)} 条")
+        print(f"   [检索提示] 正在使用简称模糊搜索: '{company_short}' | 原始拉取数: {len(feed.entries)} 条")
         
         for entry in feed.entries:
             title = entry.title.strip()
@@ -98,16 +100,16 @@ def fetch_news(company_name, group_name):
 
             articles.append(f"【媒体发布时间】: {pub_date_str}\n标题: {entry.title}\n摘要: {entry.get('summary', '无')}\n---")
             
-            if len(articles) >= 50:
+            if len(articles) >= 40:
                 break
             
         return "\n".join(articles)
     except Exception as e:
-        print(f"抓取 {group_name}-{company_name} 失败: {e}")
+        print(f"抓取 {company_short} 失败: {e}")
         return ""
 
-def analyze_with_llm(company_name, group_name, raw_text, api_key):
-    """调用大模型进行纯事实、去分析化的结构化提炼，内置多轮重试"""
+def analyze_with_llm(company_full, group_full, raw_text, api_key):
+    """大模型结合官方全称进行精准事实过滤与清洗"""
     if not raw_text.strip():
         return "未发现风险信息"
         
@@ -116,8 +118,9 @@ def analyze_with_llm(company_name, group_name, raw_text, api_key):
         "Content-Type": "application/json"
     }
     
+    # 🛡️ 将全称注入提示词，让大模型比对时更精准
     prompt = (
-        f"你是一个专业的企业风控合规数据清洗工具。请对以下关于【所属集团：{group_name if group_name else '无'} | 企业名称：{company_name}】的网络搜索结果进行清洗与结构化提炼。\n\n"
+        f"你是一个专业的企业风控合规数据清洗工具。请对以下关于【所属集团官方全称：{group_full} | 企业官方全称：{company_full}】的网络搜索结果进行清洗与结构化提炼。\n\n"
         f"【原始搜索数据】:\n{raw_text}\n\n"
         "【铁律指令 - 必须严格执行】:\n"
         "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始搜索数据】内容进行提炼。绝对不允许编造、臆断任何不存在的细节！\n"
@@ -200,12 +203,16 @@ def main():
     
     print(f"开始执行监控，共 {len(COMPANIES)} 家企业...")
     for item in COMPANIES:
-        comp_name = item["name"]
-        group_name = item["group"]
-        print(f"正在分析: {group_name if group_name else '独立企业'} -> {comp_name}")
+        comp_short = item["name"]
+        comp_full = item["full_name"]
+        group_short = item["group"]
+        group_full = item["group_full"]
         
-        raw_text = fetch_news(comp_name, group_name)
-        analysis = analyze_with_llm(comp_name, group_name, raw_text, api_key)
+        print(f"正在分析: {group_full} -> {comp_full}")
+        
+        # 🛡️ 核心改动：用简称检索网络，用全称做大模型清洗
+        raw_text = fetch_news(comp_short, group_short)
+        analysis = analyze_with_llm(comp_full, group_full, raw_text, api_key)
         
         if "监控数据获取异常" in analysis or "分析失败" in analysis:
             status = "error"
@@ -216,25 +223,27 @@ def main():
             risk_count += 1
             
         results.append({
-            "name": comp_name,
-            "group": group_name if group_name else "—",
+            "full_name": comp_full,
+            "group_full": group_full,
             "analysis": analysis,
             "status": status
         })
         
+        # 🛡️ 每次请求后制动 4.5 秒，稳定绕过 GitHub 15 RPM 限制
         time.sleep(4.5)
             
     bj_now = datetime.now(timezone(timedelta(hours=8)))
     execution_time = bj_now.strftime("%H:%M")
 
+    # 🛡️ 前端 CSS 微调：加入 word-break 确保长全称在表格里优雅换行，不撑爆版面
     html_body = f"""
     <html>
     <head>
         <style>
             body {{ font-family: 'Helvetica Neue', Arial, sans-serif; margin: 20px; color: #333; background-color: #fafafa; }}
-            .container {{ max-width: 800px; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-            table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-            th, td {{ border: 1px solid #e0e0e0; padding: 12px; text-align: left; }}
+            .container {{ max-width: 900px; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            table {{ width: 100%; border-collapse: collapse; margin: 20px 0; table-layout: fixed; }}
+            th, td {{ border: 1px solid #e0e0e0; padding: 12px; text-align: left; word-break: break-all; }}
             th {{ background-color: #f5f5f5; font-weight: bold; }}
             .risk-no {{ color: #5cb85c; font-weight: bold; }}
             .risk-yes {{ color: #d9534f; font-weight: bold; }}
@@ -246,16 +255,23 @@ def main():
     <body>
         <div class="container">
             <h2>每日企业风险监控整体汇总表</h2>
-            <p style="color:#666;">数据统计周期：过去30天公开信息 | 执行时间：北京时间 {execution_time}</p>
+            <p style="color:#666;">数据统计周期：过去15天公开信息 | 执行时间：北京时间 {execution_time}</p>
             <table>
+                <colgroup>
+                    <col style="width: 8%;">
+                    <col style="width: 42%;">
+                    <col style="width: 28%;">
+                    <col style="width: 22%;">
+                </colgroup>
                 <tr>
                     <th>序号</th>
-                    <th>企业名称</th>
-                    <th>所属集团</th>
+                    <th>企业全称</th>
+                    <th>所属集团全称</th>
                     <th>风险监控状态</th>
                 </tr>
     """
     
+    # 🛡️ 核心改动：表格生成使用官方全称
     for idx, item in enumerate(results, 1):
         if item["status"] == "safe":
             status_str = "未发现风险信息"
@@ -270,8 +286,8 @@ def main():
         html_body += f"""
                 <tr>
                     <td>{idx}</td>
-                    <td><b>{item["name"]}</b></td>
-                    <td>{item["group"]}</td>
+                    <td><b>{item["full_name"]}</b></td>
+                    <td>{item["group_full"]}</td>
                     <td class="{status_class}">{status_str}</td>
                 </tr>
         """
@@ -282,6 +298,7 @@ def main():
             <h2>企业风险详细说明列表</h2>
     """
     
+    # 🛡️ 核心改动：详细说明标题使用官方全称
     has_risk_detail = False
     for item in results:
         if item["status"] == "risk":
@@ -289,7 +306,7 @@ def main():
             formatted_res = item["analysis"].replace("\n", "<br/>")
             html_body += f"""
                 <div class="detail-block">
-                    <h3 style="color:#c9302c; margin-top:0;"> {item["group"]} - {item["name"]}</h3>
+                    <h3 style="color:#c9302c; margin-top:0;">{item["group_full"]} - {item["full_name"]}</h3>
                     <p style="line-height:1.6; color:#444;">{formatted_res}</p>
                 </div>
             """
