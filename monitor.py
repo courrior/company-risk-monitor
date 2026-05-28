@@ -8,51 +8,51 @@ import requests
 from datetime import datetime, timedelta, timezone
 import time  # 🛡️ 严格控制请求频率，消灭接口限流
 
-# ==================== 【企业名单配置区（已升级四元解耦结构）】 ====================
+# ==================== 【企业名单配置区】 ====================
 # name/group 用于后台模糊搜索（高召回防漏）；full_name/group_full 用于邮件规范显示（正式严谨）
 COMPANIES = [
     {"name": "海博思创", "full_name": "北京海博思创科技股份有限公司", "group": "", "group_full": "—"},
-    {"name": "富力城", "full_name": "沧州富力城房地产开发有限公司", "group": "富力", "group_full": "广州富力地产股份有限公司"},
-    {"name": "盛钰", "full_name": "沧州盛钰房地产开发有限公司", "group": "荣盛", "group_full": "荣盛控股股份有限公司"},
-    {"name": "旭阳化工", "full_name": "沧州旭阳化工有限公司", "group": "旭阳", "group_full": "旭阳集团有限公司"},
-    {"name": "中铁装备", "full_name": "沧州中铁装备制造材料有限公司", "group": "新华联合冶金", "group_full": "河北新华联合冶金控股集团有限公司"},
-    {"name": "承德建龙", "full_name": "承德建龙特殊钢有限公司", "group": "建龙", "group_full": "北京建龙重工集团有限公司"},
-    {"name": "燕北冶金", "full_name": "承德燕北冶金材料有限公司", "group": "建龙", "group_full": "北京建龙重工集团有限公司"},
-    {"name": "海伟石化", "full_name": "海伟石化有限公司", "group": "", "group_full": "—"},
-    {"name": "正大制管", "full_name": "邯郸正大制管集团股份有限公司", "group": "正大制管", "group_full": "邯郸正大制管集团股份有限公司"},
-    {"name": "诚实实业", "full_name": "河北诚实实业集团有限公司", "group": "诚实", "group_full": "河北诚实实业集团有限公司"},
-    {"name": "华荣制药", "full_name": "河北华荣制药有限公司", "group": "石药", "group_full": "石药控股集团有限公司"},
+    {"name": "富力城", "full_name": "富力城房地产开发有限公司", "group": "富力", "group_full": "富力集团"},
+    {"name": "盛钰", "full_name": "荣盛集团旗下盛钰相关主体", "group": "荣盛", "group_full": "荣盛控股股份有限公司"},
+    {"name": "旭阳化工", "full_name": "旭阳化工有限公司", "group": "旭阳", "group_full": "中国旭阳集团"},
+    {"name": "中铁装备", "full_name": "中铁工程装备集团有限公司", "group": "新华联合冶金", "group_full": "新华联合冶金控股集团"},
+    {"name": "承德建龙", "full_name": "承德建龙特殊钢有限公司", "group": "建龙", "group_full": "建龙重工集团"},
+    {"name": "燕北冶金", "full_name": "承德燕北冶金材料有限公司", "group": "建龙", "group_full": "建龙重工集团"},
+    {"name": "海伟石化", "full_name": "海伟交通设施集团石化有限公司", "group": "", "group_full": "—"},
+    {"name": "正大制管", "full_name": "邯郸正大制管集团股份有限公司", "group": "正大制管", "group_full": "正大制管集团"},
+    {"name": "诚实实业", "full_name": "诚实实业集团有限公司", "group": "诚实", "group_full": "诚实集团"},
+    {"name": "华荣制药", "full_name": "石药集团华荣制药有限公司", "group": "石药", "group_full": "石药控股集团有限公司"},
     {"name": "敬业高品钢", "full_name": "河北敬业高品钢科技有限公司", "group": "敬业", "group_full": "敬业集团有限公司"},
-    {"name": "河北敬业宽板科技有限公司", "group": "敬业", "full_name": "乌兰浩特钢铁有限责任公司宽厚板厂", "group_full": "敬业集团有限公司"},
-    {"name": "千喜鹤饮食", "full_name": "河北千喜鹤饮食股份有限公司", "group": "千喜鹤", "group_full": "河北千喜鹤饮食股份有限公司"},
-    {"name": "新武安钢铁", "full_name": "河北新武安钢铁集团烘熔钢铁有限公司", "group": "普阳钢铁", "group_full": "河北普阳钢铁有限公司"},
-    {"name": "旭阳能源", "full_name": "河北旭阳能源有限公司", "group": "旭阳", "group_full": "旭阳集团有限公司"},
-    {"name": "华夏幸福基业控股", "full_name": "华夏幸福基业控股股份公司", "group": "华夏幸福", "group_full": "华夏幸福基业股份有限公司"},
-    {"name": "今麦郎饮品", "full_name": "今麦郎饮品股份有限公司", "group": "今麦郎", "group_full": "今麦郎投资有限公司"},
+    {"name": "敬业宽板", "full_name": "乌兰浩特钢铁有限责任公司宽厚板厂", "group": "敬业", "group_full": "敬业集团有限公司"},
+    {"name": "千喜鹤饮食", "full_name": "千喜鹤饮食股份有限公司", "group": "千喜鹤", "group_full": "千喜鹤集团"},
+    {"name": "新武安钢铁", "full_name": "武安市新武安钢铁集团有限公司", "group": "普阳钢铁", "group_full": "河北普阳钢铁集团"},
+    {"name": "旭阳能源", "full_name": "定州旭阳能源有限公司", "group": "旭阳", "group_full": "中国旭阳集团"},
+    {"name": "华夏幸福基业控股", "full_name": "华夏幸福基业控股股份公司", "group": "华夏幸福", "group_full": "华夏幸福"},
+    {"name": "今麦郎饮品", "full_name": "今麦郎饮品股份有限公司", "group": "今麦郎", "group_full": "今麦郎食品股份有限公司"},
     {"name": "敬业钢铁", "full_name": "敬业钢铁有限公司", "group": "敬业", "group_full": "敬业集团有限公司"},
-    {"name": "铭顺石油天然气", "full_name": "廊坊市铭顺石油天然气销售有限公司", "group": "铭顺", "group_full": "廊坊市铭顺石油天然气销售有限公司"},
-    {"name": "廊坊市天然气", "full_name": "廊坊市天然气有限公司", "group": "廊坊市天然气", "group_full": "廊坊市天然气有限公司"},
-    {"name": "翔福新能源", "full_name": "内蒙古翔福新能源有限责任公司", "group": "旭阳", "group_full": "旭阳集团有限公司"},
-    {"name": "迁安正大", "full_name": "迁安正大通用钢管有限公司", "group": "正大制管", "group_full": "邯郸正大制管集团股份有限公司"},
+    {"name": "铭顺石油天然气", "full_name": "铭顺石油天然气销售有限公司", "group": "铭顺", "group_full": "铭顺集团"},
+    {"name": "廊坊市天然气", "full_name": "廊坊市天然气有限公司", "group": "廊坊市天然气", "group_full": "廊坊市天然气集团"},
+    {"name": "翔福新能源", "full_name": "河北翔福新能源有限责任公司", "group": "旭阳", "group_full": "中国旭阳集团"},
+    {"name": "迁安正大", "full_name": "迁安正大通用钢管有限公司", "group": "正大制管", "group_full": "正大制管集团"},
     {"name": "荣盛房地产", "full_name": "荣盛房地产发展股份有限公司", "group": "荣盛", "group_full": "荣盛控股股份有限公司"},
-    {"name": "三河汇福粮油集团精炼植物油", "full_name": "三河汇福粮油集团精炼植物油有限公司", "group": "三河汇福", "group_full": "三河汇福粮油集团有限公司"},
+    {"name": "三河汇福粮油集团精炼植物油", "full_name": "三河汇福粮油集团精炼植物油有限公司", "group": "三河汇福", "group_full": "三河汇福粮油集团"},
     {"name": "恩必普", "full_name": "石药集团恩必普药业有限公司", "group": "石药", "group_full": "石药控股集团有限公司"},
-    {"name": "班公措", "full_name": "唐山班公措新材料有限公司", "group": "", "group_full": "—"},
-    {"name": "创齐贸易", "full_name": "唐山创齐贸易有限公司", "group": "", "group_full": "—"},
-    {"name": "万丰制管", "full_name": "唐山市丰南区万丰制管有限公司", "group": "", "group_full": "—"},
-    {"name": "格萨贸易", "full_name": "唐山市格萨贸易有限公司", "group": "格萨", "group_full": "唐山市格萨贸易有限公司"},
-    {"name": "旭阳化工", "full_name": "唐山旭阳化工有限公司", "group": "旭阳", "group_full": "旭阳集团有限公司"},
-    {"name": "津衡石油化工", "full_name": "天津津衡石油化工贸易有限责任公司", "group": "", "group_full": "—"},
-    {"name": "武安市裕华钢铁", "full_name": "武安市裕华钢铁有限公司", "group": "冀南钢铁", "group_full": "冀南钢铁集团有限公司"},
-    {"name": "澳森金属", "full_name": "辛集市澳森金属制品有限公司", "group": "澳森特钢", "group_full": "辛集市澳森特钢集团有限公司"},
-    {"name": "澳森特钢", "full_name": "辛集市澳森特钢集团有限公司", "group": "澳森特钢", "group_full": "辛集市澳森特钢集团有限公司"},
-    {"name": "泽明国际", "full_name": "辛集市泽明国际贸易有限公司", "group": "", "group_full": "—"},
-    {"name": "新奥控股", "full_name": "新奥控股投资股份有限公司", "group": "廊坊市天然气", "group_full": "廊坊市天然气有限公司"},
-    {"name": "新奥能源", "full_name": "新奥能源供应链有限公司", "group": "廊坊市天然气", "group_full": "廊坊市天然气有限公司"},
-    {"name": "银盾云", "full_name": "浙江银盾云科技有限公司", "group": "润泽", "group_full": "京津冀润泽（廊坊）数字信息有限公司"},
-    {"name": "正大供应链", "full_name": "正大(天津)供应链有限公司", "group": "正大制管", "group_full": "邯郸正大制管集团股份有限公司"},
-    {"name": "知合", "full_name": "知合控股有限公司", "group": "华夏幸福", "group_full": "华夏幸福基业股份有限公司"},
-    {"name": "中海外", "full_name": "中海外交通建设有限公司", "group": "", "group_full": "—"}
+    {"name": "班公措", "full_name": "班公措相关贸易主体", "group": "", "group_full": "—"},
+    {"name": "创齐贸易", "full_name": "创齐贸易有限公司", "group": "", "group_full": "—"},
+    {"name": "万丰制管", "full_name": "万丰制管有限公司", "group": "", "group_full": "—"},
+    {"name": "格萨贸易", "full_name": "格萨贸易有限公司", "group": "格萨", "group_full": "格萨集团"},
+    {"name": "旭阳化工", "full_name": "沧州旭阳化工有限公司", "group": "旭阳", "group_full": "中国旭阳集团"},
+    {"name": "津衡石油化工", "full_name": "津衡石油化工有限公司", "group": "", "group_full": "—"},
+    {"name": "武安市裕华钢铁", "full_name": "武安市裕华钢铁有限公司", "group": "冀南钢铁", "group_full": "冀南钢铁集团"},
+    {"name": "澳森金属", "full_name": "辛集市澳森金属制品有限公司", "group": "澳森特钢", "group_full": "河北澳森特钢集团"},
+    {"name": "澳森特钢", "full_name": "河北澳森特钢集团有限公司", "group": "澳森特钢", "group_full": "河北澳森特钢集团"},
+    {"name": "泽明国际", "full_name": "泽明国际贸易有限公司", "group": "", "group_full": "—"},
+    {"name": "新奥控股", "full_name": "新奥控股投资股份有限公司", "group": "廊坊市天然气", "group_full": "新奥集团"},
+    {"name": "新奥能源", "full_name": "新奥能源控股有限公司", "group": "廊坊市天然气", "group_full": "新奥集团"},
+    {"name": "银盾云", "full_name": "银盾云数据中心有限公司", "group": "润泽", "group_full": "润泽科技"},
+    {"name": "正大(天津)供应链", "full_name": "正大(天津)供应链管理有限公司", "group": "正大制管", "group_full": "正大制管集团"},
+    {"name": "知合", "full_name": "知合控股有限公司", "group": "华夏幸福", "group_full": "华夏幸福"},
+    {"name": "中海外", "full_name": "中国海外工程有限责任公司", "group": "", "group_full": "—"}
 ]
 # ==================================================================================
 
@@ -60,13 +60,22 @@ API_URL = "https://models.inference.ai.azure.com/chat/completions"
 MODEL_NAME = "gpt-4o-mini"  
 
 def fetch_news(company_short, group_short):
-    """利用 简称 进行大网全量、高召回率抓取，防漏报"""
-    keywords = "(风险 OR 诉讼 OR 处罚 OR 违规 OR 财务 OR 执行 OR 舆情 OR 通报 OR 督察 OR 点名 OR 查处 OR 立案 OR 被罚)"
+    """进行清洗加固后的搜索，防御词义污染，确保轻量表达式100%被引擎解析"""
     
-    if group_short and group_short.strip():
-        query = f"({company_short} OR {group_short}) {keywords} when:15d" 
+    # 🛡️【重大升级 1】：自动对短简称加固。防止“爱岗敬业”、“做人诚实”等社会高频词造成严重的噪音海啸
+    c_search = company_short
+    g_search = group_short
+    
+    if g_search and len(g_search) <= 2 and not g_search.endswith("集团"):
+        g_search = f"{g_search}集团"
+        
+    # 🛡️【重大升级 2】：精炼核心风控词（降低表达式长度），确保 Google News RSS 引擎不产生解析 Bug
+    keywords_str = "(风险 OR 处罚 OR 通报 OR 违规 OR 诉讼 OR 执行)"
+    
+    if g_search and g_search.strip():
+        query = f"({c_search} OR {g_search}) {keywords_str} when:30d" 
     else:
-        query = f"{company_short} {keywords} when:15d"
+        query = f"{c_search} {keywords_str} when:30d"
         
     encoded_query = urllib.parse.quote(query)
     url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
@@ -76,7 +85,7 @@ def fetch_news(company_short, group_short):
         articles = []
         seen_titles = set()  
         
-        print(f"   [检索提示] 正在使用简称模糊搜索: '{company_short}' | 原始拉取数: {len(feed.entries)} 条")
+        print(f"   [安全检索] 正在使用清洁词检索: '{query}' | 原始抓取: {len(feed.entries)} 条")
         
         for entry in feed.entries:
             title = entry.title.strip()
@@ -118,7 +127,6 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
         "Content-Type": "application/json"
     }
     
-    # 🛡️ 将全称注入提示词，让大模型比对时更精准
     prompt = (
         f"你是一个专业的企业风控合规数据清洗工具。请对以下关于【所属集团官方全称：{group_full} | 企业官方全称：{company_full}】的网络搜索结果进行清洗与结构化提炼。\n\n"
         f"【原始搜索数据】:\n{raw_text}\n\n"
@@ -210,7 +218,6 @@ def main():
         
         print(f"正在分析: {group_full} -> {comp_full}")
         
-        # 🛡️ 核心改动：用简称检索网络，用全称做大模型清洗
         raw_text = fetch_news(comp_short, group_short)
         analysis = analyze_with_llm(comp_full, group_full, raw_text, api_key)
         
@@ -235,7 +242,6 @@ def main():
     bj_now = datetime.now(timezone(timedelta(hours=8)))
     execution_time = bj_now.strftime("%H:%M")
 
-    # 🛡️ 前端 CSS 微调：加入 word-break 确保长全称在表格里优雅换行，不撑爆版面
     html_body = f"""
     <html>
     <head>
@@ -255,7 +261,7 @@ def main():
     <body>
         <div class="container">
             <h2>每日企业风险监控整体汇总表</h2>
-            <p style="color:#666;">数据统计周期：过去15天公开信息 | 执行时间：北京时间 {execution_time}</p>
+            <p style="color:#666;">数据统计周期：过去30天公开信息 | 执行时间：北京时间 {execution_time}</p>
             <table>
                 <colgroup>
                     <col style="width: 8%;">
@@ -271,7 +277,6 @@ def main():
                 </tr>
     """
     
-    # 🛡️ 核心改动：表格生成使用官方全称
     for idx, item in enumerate(results, 1):
         if item["status"] == "safe":
             status_str = "未发现风险信息"
@@ -298,7 +303,6 @@ def main():
             <h2>企业风险详细说明列表</h2>
     """
     
-    # 🛡️ 核心改动：详细说明标题使用官方全称
     has_risk_detail = False
     for item in results:
         if item["status"] == "risk":
