@@ -57,7 +57,7 @@ COMPANIES = [
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
 MODEL_NAME = "gpt-4o-mini"  
 def fetch_news(company_name, group_name):
-    """利用 Google News RSS 联合抓取企业公开信息，并带上新闻发布时间"""
+    """利用 Google News RSS 抓取信息，并将媒体发布时间自动换算为北京时间"""
     keywords = "(风险 OR 诉讼 OR 处罚 OR 违规 OR 财务 OR 执行 OR 舆情)"
     if group_name and group_name.strip():
         query = f"({company_name} OR {group_name}) {keywords} when:30d" 
@@ -74,9 +74,23 @@ def fetch_news(company_name, group_name):
         print(f"   [调试信息] '{company_name}' 原始抓取到新闻条数: {len(feed.entries)} 条")
         
         for entry in feed.entries[:15]:
-            # 🛡️ 【升级点】：提取新闻在互联网上的标准发布时间
-            pub_date = entry.get('published', '未知发布时间')
-            articles.append(f"【媒体发布时间】: {pub_date}\n标题: {entry.title}\n摘要: {entry.get('summary', '无')}\n---")
+            # 🛡️ 【升级点 1】：自动换算 GMT/UTC 时间至北京时间（符合中国阅读习惯）
+            pub_date_str = "未知发布时间"
+            parsed_time = entry.get('published_parsed') # feedparser 自动解析的 UTC 时间结构体
+            if parsed_time:
+                try:
+                    dt_utc = datetime(parsed_time.tm_year, parsed_time.tm_mon, parsed_time.tm_mday,
+                                      parsed_time.tm_hour, parsed_time.tm_min, parsed_time.tm_sec,
+                                      tzinfo=timezone.utc)
+                    # 转换为北京时间 (UTC+8)
+                    dt_bj = dt_utc.astimezone(timezone(timedelta(hours=8)))
+                    pub_date_str = dt_bj.strftime("%Y年%m月%d日 %H:%M")
+                except Exception:
+                    pub_date_str = entry.get('published', '未知发布时间')
+            else:
+                pub_date_str = entry.get('published', '未知发布时间')
+
+            articles.append(f"【媒体发布时间】: {pub_date_str}\n标题: {entry.title}\n摘要: {entry.get('summary', '无')}\n---")
             
         return "\n".join(articles)
     except Exception as e:
@@ -84,7 +98,7 @@ def fetch_news(company_name, group_name):
         return ""
 
 def analyze_with_llm(company_name, group_name, raw_text, api_key):
-    """调用大模型进行双时间维度的深度清洗与提炼"""
+    """调用大模型进行纯事实、去分析化的结构化提炼"""
     if not raw_text.strip():
         return "未发现风险信息"
         
@@ -93,29 +107,29 @@ def analyze_with_llm(company_name, group_name, raw_text, api_key):
         "Content-Type": "application/json"
     }
     
-    # 🛡️ 【升级点】：在 Prompt 模版中死磕双时间格式
+    # 🛡️ 【重构核心】：严格限定4个字段，彻底删掉“起因/结果”，严禁AI发挥
     prompt = (
-        f"你是一个专业的企业风控合规专家。请对以下关于【所属集团：{group_name if group_name else '无'} | 企业名称：{company_name}】的网络搜索结果进行深度清洗与提炼。\n\n"
+        f"你是一个专业的企业风控合规数据清洗工具。请对以下关于【所属集团：{group_name if group_name else '无'} | 企业名称：{company_name}】的网络搜索结果进行清洗与结构化提炼。\n\n"
         f"【原始搜索数据】:\n{raw_text}\n\n"
         "【铁律指令 - 必须严格执行】:\n"
-        "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始搜索数据】内容进行提炼。绝对不允许编造任何不存在的细节！\n"
-        "2. 必须去除所有广告、无关推广和陈旧重复信息。\n"
-        "3. 仅保留真实的、近期的风险信息（包括但不限于：财务危机、高管变动、负面舆情、诉讼纠纷、被执行、行政处罚、退市警告等）。\n"
-        "4. 如果发现相关风险，请以清晰的列表形式、逐个详细说明。每一条风险必须严格包含以下4个子字段，不得合并或缺失：\n"
-        "   - **信息公布时间**: [从原始数据的【媒体发布时间】或正文中提取的新闻曝光时间]\n"
-        "   - **风险实际发生时间**: [事件真正发生的年份/月份，或财务数据所属的报告期，如2025年度]\n"
-        "   - **起因**: [导致该风险的具体行为、事件或财务数据细节]\n"
-        "   - **结果**: [该事件引发的直接后果、法律责任或市场变动]\n"
-        "5. 如果没有任何相关的风险或上述变动信息，请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号、解释或多余的文字。"
+        "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始搜索数据】内容进行提炼。绝对不允许编造、臆断任何不存在的细节！\n"
+        "2. 绝对中立铁律：【完全不需要】进行任何原因分析、后果预测、或主观定性（严禁出现“说明财务恶化”、“面临危机”、“提醒注意”等AI主观评价）。完全真实、客观地还原新闻提及的事实本身。\n"
+        "3. 拒绝过度总结：保留原始数据中关键的时间、具体的涉案金额、具体的违规缘由、公告编号等核心事实细节，【严禁】将详细过程压缩、抽象成一句话。\n"
+        "4. 如果发现风险或变动，请以清晰的列表形式说明。每一条必须严格且仅包含以下4个子字段，不得合并、缺失或自行增加其他字段（严禁出现“起因”、“结果”等）：\n"
+        "   - **风险主体全称**: [必须写出原始数据中该事件直接指向的企业或集团的工商完整名称]\n"
+        "   - **信息公布时间**: [直接使用原始数据中提供的【媒体发布时间】]\n"
+        "   - **风险实际发生时间/报告期**: [事件真正发生的具体日期、年份、月份或财务数据所属的报告期]\n"
+        "   - **风险详细内容**: [明确交代哪个主体在什么背景下发生了什么事。详尽还原原始事实细节，包含涉及的业务、涉案具体金额或违规事项，不作任何AI的二次加工和延伸解释]\n"
+        "5. 如果没有任何相关的风险或变动信息，请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号或多余文字。"
     )
     
     data = {
         "model": MODEL_NAME,
         "messages": [
-            {"role": "system", "content": "你是一个严格遵守字段格式和真实性指令的AI风控助手。"},
+            {"role": "system", "content": "你是一个只做客观事实提炼、不输出任何主观定性、原因及后果分析的AI风控助手。"},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.1
+        "temperature": 0.0  # 设为0，确保最极致的严谨度，防止AI自由发挥
     }
     
     try:
