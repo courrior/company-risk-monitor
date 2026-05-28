@@ -8,6 +8,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 import time
 
+
 COMPANIES = [
     {"name": "海博思创", "group": ""},
     {"name": "富力城", "group": "富力"},
@@ -57,8 +58,9 @@ API_URL = "https://models.inference.ai.azure.com/chat/completions"
 MODEL_NAME = "gpt-4o-mini"  
 
 def fetch_news(company_name, group_name):
-    """利用 Google News RSS 抓取信息，并将媒体发布时间自动换算为北京时间"""
-    keywords = "(风险 OR 诉讼 OR 处罚 OR 违规 OR 财务 OR 执行 OR 舆情)"
+    """利用 Google News RSS 抓取信息，扩充关键风险词并开启全量扫描防漏报"""
+    keywords = "(风险 OR 诉讼 OR 处罚 OR 违规 OR 财务 OR 执行 OR 舆情 OR 通报 OR 督察 OR 点名 OR 查处 OR 立案 OR 被罚)"
+    
     if group_name and group_name.strip():
         query = f"({company_name} OR {group_name}) {keywords} when:30d" 
     else:
@@ -70,10 +72,16 @@ def fetch_news(company_name, group_name):
     try:
         feed = feedparser.parse(url)
         articles = []
+        seen_titles = set() 
         
-        print(f"   [调试信息] '{company_name}' 原始抓取到新闻条数: {len(feed.entries)} 条")
+        print(f"   [调试信息] '{company_name}' 原始抓取到新闻总条数: {len(feed.entries)} 条")
         
-        for entry in feed.entries[:15]:
+        for entry in feed.entries:
+            title = entry.title.strip()
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
+            
             pub_date_str = "未知发布时间"
             parsed_time = entry.get('published_parsed') 
             if parsed_time:
@@ -90,13 +98,16 @@ def fetch_news(company_name, group_name):
 
             articles.append(f"【媒体发布时间】: {pub_date_str}\n标题: {entry.title}\n摘要: {entry.get('summary', '无')}\n---")
             
+            if len(articles) >= 50:
+                break
+            
         return "\n".join(articles)
     except Exception as e:
         print(f"抓取 {group_name}-{company_name} 失败: {e}")
         return ""
 
 def analyze_with_llm(company_name, group_name, raw_text, api_key):
-    """调用大模型进行纯事实、去分析化的结构化提炼，内置自动重试逻辑保障 100% 成功率"""
+    """调用大模型进行纯事实、去分析化的结构化提炼，内置多轮重试"""
     if not raw_text.strip():
         return "未发现风险信息"
         
@@ -112,11 +123,11 @@ def analyze_with_llm(company_name, group_name, raw_text, api_key):
         "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始搜索数据】内容进行提炼。绝对不允许编造、臆断任何不存在的细节！\n"
         "2. 绝对中立铁律：【完全不需要】进行任何原因分析、后果预测、或主观定性（严禁出现“说明财务恶化”、“面临危机”、“提醒注意”等AI主观评价）。完全真实、客观地还原新闻提及的事实本身。\n"
         "3. 拒绝过度总结：保留原始数据中关键的时间、具体的涉案金额、具体的违规缘由、公告编号等核心事实细节，【严禁】将详细过程压缩、抽象成一句话。\n"
-        "4. 如果发现风险或变动，请以清晰的列表形式说明。每一条必须严格且仅包含以下4个子字段，不得合并、缺失或自行增加其他字段：\n"
+        "4. 如果发现风险或变动，请以清晰的列表形式说明。每一条必须严格且仅包含以下4个子字段，不得合并、缺失或自行增加其他字段（严禁出现“起因”、“结果”等）：\n"
         "   - 风险主体: [必须写出原始数据中该事件直接指向的企业或集团的工商完整名称]\n"
         "   - 风险信息公布时间: [直接使用原始数据中提供的【媒体发布时间】]\n"
         "   - 风险信息发生时间: [事件真正发生的具体日期、年份、月份]\n"
-        "   - 风险详细内容: [明确交代哪个主体在什么背景下发生了什么事。详尽还原原始事实细节，包含涉及的社会事件、诉讼、舆情、业务、涉案具体金额或违规事项，不作任何AI的二次加工和延伸解释]\n"
+        "   - 风险详细内容: [明确交代哪个主体在什么背景下发生了什么事。详尽还原原始事实细节，包含涉及的涉诉、舆情信息、业务、涉案具体金额或违规事项，不作任何AI的二次加工和延伸解释]\n"
         "5. 如果没有任何相关的风险或变动信息，请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号或多余文字。"
     )
     
@@ -138,22 +149,20 @@ def analyze_with_llm(company_name, group_name, raw_text, api_key):
                 if 'choices' in res_json and len(res_json['choices']) > 0:
                     return res_json['choices'][0]['message']['content'].strip()
             elif response.status_code == 429:
-                print(f"   [重试提示] 触发GitHub官方限流锁(429)，第 {attempt + 1} 次重试，正在静默等待 15 秒...")
+                print(f"   [重试提示] 触发官方频率限制(429)，正在静默等待15秒...")
                 time.sleep(15)
                 continue
             else:
-                print(f"   [重试提示] 接口服务异常(状态码:{response.status_code})，5秒后进行第 {attempt + 1} 次重试...")
                 time.sleep(5)
                 continue
         except Exception as e:
-            print(f"   [重试提示] 网络连通异常({e})，5秒后进行第 {attempt + 1} 次重试...")
             time.sleep(5)
             continue
             
     return "监控数据获取异常（请稍后重新运行触发）"
 
 def send_email(html_content, total_count, risk_count):
-    """通过 SMTP 发送 HTML 格式的精美邮件"""
+    """通过 SMTP 发送 HTML 格式的邮件"""
     smtp_server = os.environ.get("SMTP_SERVER", "smtp.qq.com")
     smtp_port = 465
     sender_user = os.environ.get("SMTP_USER")
@@ -167,7 +176,7 @@ def send_email(html_content, total_count, risk_count):
     msg = MIMEMultipart()
     msg['From'] = sender_user
     msg['To'] = receiver
-    msg['Subject'] = f"【每日风险监控】今日汇总表（监控:{total_count}家 | 异常:{risk_count}家）"
+    msg['Subject'] = f"【每日风险监控】今日汇总表（监控:{total_count}家 | 发现风险:{risk_count}家）"
     
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
     
@@ -229,7 +238,7 @@ def main():
             th {{ background-color: #f5f5f5; font-weight: bold; }}
             .risk-no {{ color: #5cb85c; font-weight: bold; }}
             .risk-yes {{ color: #d9534f; font-weight: bold; }}
-            .risk-error {{ color: #ff9800; font-weight: bold; font-style: italic; }} /* 橙色低调提示色 */
+            .risk-error {{ color: #ff9800; font-weight: bold; font-style: italic; }}
             .detail-block {{ background-color: #fff9f9; padding: 15px; border-left: 4px solid #d9534f; margin-bottom: 15px; border-radius: 0 4px 4px 0; }}
             h2 {{ color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; }}
         </style>
@@ -275,7 +284,6 @@ def main():
     
     has_risk_detail = False
     for item in results:
-        # 🛡️ 严格只有被系统判定为 status == 'risk' 的企业才会进入下方的详细说明
         if item["status"] == "risk":
             has_risk_detail = True
             formatted_res = item["analysis"].replace("\n", "<br/>")
