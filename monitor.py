@@ -5,6 +5,7 @@ from email.mime.multipart import MIMEMultipart
 import urllib.parse
 import feedparser
 import requests
+from datetime import datetime, timedelta, timezone
 
 # ==================== 【企业名单配置区】 ====================
 COMPANIES = [
@@ -178,6 +179,11 @@ def main():
             "is_safe": is_safe
         })
             
+    # 1. 在 html_body 上方注入时间计算代码
+    bj_now = datetime.now(timezone(timedelta(hours=8)))
+    execution_time = bj_now.strftime("%H:%M")
+
+    # 2. 替换为动态时间模板
     html_body = f"""
     <html>
     <head>
@@ -196,7 +202,7 @@ def main():
     <body>
         <div class="container">
             <h2>每日企业风险监控整体汇总表</h2>
-            <p style="color:#666;">数据统计周期：过去24小时公开信息 | 执行时间：北京时间 07:30</p>
+            <p style="color:#666;">数据统计周期：过去24小时公开信息 | 执行时间：北京时间 {execution_time}</p>
             <table>
                 <tr>
                     <th>序号</th>
