@@ -6,10 +6,9 @@ import urllib.parse
 import feedparser
 import requests
 from datetime import datetime, timedelta, timezone
-import time  # 🛡️ 严格控制请求频率，消灭接口限流
+import time
 
 # ==================== 【企业名单配置区】 ====================
-# name/group 用于后台模糊搜索（高召回防漏）；full_name/group_full 用于邮件规范显示（正式严谨）
 COMPANIES = [
     {"name": "海博思创", "full_name": "北京海博思创科技股份有限公司", "group": "", "group_full": "—"},
     {"name": "富力城", "full_name": "富力城房地产开发有限公司", "group": "富力", "group_full": "富力集团"},
@@ -41,8 +40,6 @@ COMPANIES = [
     {"name": "创齐贸易", "full_name": "创齐贸易有限公司", "group": "", "group_full": "—"},
     {"name": "万丰制管", "full_name": "万丰制管有限公司", "group": "", "group_full": "—"},
     {"name": "格萨贸易", "full_name": "格萨贸易有限公司", "group": "格萨", "group_full": "格萨集团"},
-    {"name": "旭阳化工", "full_name": "沧州旭阳化工有限公司", "group": "旭阳", "group_full": "中国旭阳集团"},
-    {"name": "津衡石油化工", "full_name": "津衡石油化工有限公司", "group": "", "group_full": "—"},
     {"name": "武安市裕华钢铁", "full_name": "武安市裕华钢铁有限公司", "group": "冀南钢铁", "group_full": "冀南钢铁集团"},
     {"name": "澳森金属", "full_name": "辛集市澳森金属制品有限公司", "group": "澳森特钢", "group_full": "河北澳森特钢集团"},
     {"name": "澳森特钢", "full_name": "河北澳森特钢集团有限公司", "group": "澳森特钢", "group_full": "河北澳森特钢集团"},
@@ -60,32 +57,34 @@ API_URL = "https://models.inference.ai.azure.com/chat/completions"
 MODEL_NAME = "gpt-4o-mini"  
 
 def fetch_news(company_short, group_short):
-    """进行清洗加固后的搜索，防御词义污染，确保轻量表达式100%被引擎解析"""
+    """【时效性+查全率终极升级】规范引入 when:30d 并通过 Python 时间戳进行硬核二次过滤，彻底拉满 100 条上限"""
+    c_search = company_short.strip()
+    g_search = group_short.strip()
     
-    # 🛡️【重大升级 1】：自动对短简称加固。防止“爱岗敬业”、“做人诚实”等社会高频词造成严重的噪音海啸
-    c_search = company_short
-    g_search = group_short
-    
+    # 规避“爱岗敬业”等词汇产生的无关噪音
     if g_search and len(g_search) <= 2 and not g_search.endswith("集团"):
         g_search = f"{g_search}集团"
         
-    # 🛡️【重大升级 2】：精炼核心风控词（降低表达式长度），确保 Google News RSS 引擎不产生解析 Bug
-    keywords_str = "(风险 OR 处罚 OR 通报 OR 违规 OR 诉讼 OR 执行)"
-    
-    if g_search and g_search.strip():
-        query = f"({c_search} OR {g_search}) {keywords_str} when:30d" 
+    # 构造最稳健的包含 30 天限制的 Google 检索式
+    if g_search and g_search != c_search:
+        query = f"({c_search} OR {g_search}) when:30d" 
     else:
-        query = f"{c_search} {keywords_str} when:30d"
+        query = f"{c_search} when:30d"
         
     encoded_query = urllib.parse.quote(query)
     url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+    
+    # 设定严格的时间界限：当前北京时间向前推 30 天
+    bj_tz = timezone(timedelta(hours=8))
+    now_bj = datetime.now(bj_tz)
+    cutoff_date = now_bj - timedelta(days=30)
     
     try:
         feed = feedparser.parse(url)
         articles = []
         seen_titles = set()  
         
-        print(f"   [安全检索] 正在使用清洁词检索: '{query}' | 原始抓取: {len(feed.entries)} 条")
+        print(f"   [时效监控激活] 检索句: '{query}' | 原始拉取数: {len(feed.entries)} 条")
         
         for entry in feed.entries:
             title = entry.title.strip()
@@ -93,23 +92,35 @@ def fetch_news(company_short, group_short):
                 continue
             seen_titles.add(title)
             
+            # 解析文章的发布日期
             pub_date_str = "未知发布时间"
             parsed_time = entry.get('published_parsed') 
+            
             if parsed_time:
                 try:
                     dt_utc = datetime(parsed_time.tm_year, parsed_time.tm_mon, parsed_time.tm_mday,
                                       parsed_time.tm_hour, parsed_time.tm_min, parsed_time.tm_sec,
                                       tzinfo=timezone.utc)
-                    dt_bj = dt_utc.astimezone(timezone(timedelta(hours=8)))
+                    dt_bj = dt_utc.astimezone(bj_tz)
+                    
+                    # 🛡️ 核心时效性钢印：如果文章真实发布时间早于30天前，直接抛弃，确保不掺杂陈旧数据
+                    if dt_bj < cutoff_date:
+                        print(f"     └─ [时间过滤] 过滤掉过期文章: {title} (发布于 {dt_bj.strftime('%Y-%m-%d')})")
+                        continue
+                        
                     pub_date_str = dt_bj.strftime("%Y年%m月%d日 %H:%M")
                 except Exception:
                     pub_date_str = entry.get('published', '未知发布时间')
             else:
                 pub_date_str = entry.get('published', '未知发布时间')
 
+            # 诊断日志：打印进入 AI 筛选池的有效高时效文章
+            print(f"     └─ [保留入池] 有效期内新闻: {title} ({pub_date_str})")
+            
             articles.append(f"【媒体发布时间】: {pub_date_str}\n标题: {entry.title}\n摘要: {entry.get('summary', '无')}\n---")
             
-            if len(articles) >= 40:
+            # 🚀 彻底解开 40 条限制，直接允许读取到 Google RSS 接口的物理输出极限（100条）
+            if len(articles) >= 100:
                 break
             
         return "\n".join(articles)
@@ -118,7 +129,7 @@ def fetch_news(company_short, group_short):
         return ""
 
 def analyze_with_llm(company_full, group_full, raw_text, api_key):
-    """大模型结合官方全称进行精准事实过滤与清洗"""
+    """AI 风控漏斗层：在 30 天纯净数据池中，精准剔除正面公关，抓取核心负面"""
     if not raw_text.strip():
         return "未发现风险信息"
         
@@ -128,24 +139,26 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
     }
     
     prompt = (
-        f"你是一个专业的企业风控合规数据清洗工具。请对以下关于【所属集团官方全称：{group_full} | 企业官方全称：{company_full}】的网络搜索结果进行清洗与结构化提炼。\n\n"
-        f"【原始搜索数据】:\n{raw_text}\n\n"
+        f"你是一个专业的企业风控合规数据清洗漏斗。请对以下关于【所属集团官方全称：{group_full} | 企业官方全称：{company_full}】的过去30天全量网络新闻进行智能化风控筛选。\n\n"
+        f"【核心筛选法则】：\n"
+        f"传入的数据均已通过前置时间戳验证，确属30天内最新新闻。你的核心任务是【剔除所有正常经营、正面宣传等无关信息】，【仅提取】涉及负面风险、合规问题、监管变动的文章（如：生态环保督察、点名通报、行政处罚、法律诉讼、违规违法、被执行人、严重负面舆情等）。\n\n"
+        f"【原始数据池】:\n{raw_text}\n\n"
         "【铁律指令 - 必须严格执行】:\n"
-        "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始搜索数据】内容进行提炼。绝对不允许编造、臆断任何不存在的细节！\n"
-        "2. 绝对中立铁律：【完全不需要】进行任何原因分析、后果预测、或主观定性（严禁出现“说明财务恶化”、“面临危机”、“提醒注意”等AI主观评价）。完全真实、客观地还原新闻提及的事实本身。\n"
-        "3. 拒绝过度总结：保留原始数据中关键的时间、具体的涉案金额、具体的违规缘由、公告编号等核心事实细节，【严禁】将详细过程压缩、抽象成一句话。\n"
-        "4. 如果发现风险或变动，请以清晰的列表形式说明。每一条必须严格且仅包含以下4个子字段，不得合并、缺失或自行增加其他字段（严禁出现“起因”、“结果”等）：\n"
-        "   - 风险主体: [必须写出原始数据中该事件直接指向的企业或集团的工商完整名称]\n"
+        "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始数据池】内容进行提炼。绝对不允许编造、臆断任何不存在的细节！\n"
+        "2. 绝对中立铁律：完全不需要进行任何主观定性或后果预测，完全真实、客观地还原新闻提及的事实本身。\n"
+        "3. 拒绝过度总结：详尽还原原始事实细节（如包含具体的环保督察组点名详情、通报具体内容、公告编号、涉及金额等），严禁压缩成毫无细节的一句话。\n"
+        "4. 如果发现任何符合要求的负面风险信息，请以清晰的列表形式说明。每一条必须严格且仅包含以下4个子字段：\n"
+        f"   - 风险主体: [请在此直接填写：{company_full} 或 {group_full}]\n"
         "   - 风险信息公布时间: [直接使用原始数据中提供的【媒体发布时间】]\n"
-        "   - 风险信息发生时间: [事件真正发生的具体日期、年份、月份]\n"
-        "   - 风险详细内容: [明确交代哪个主体在什么背景下发生了什么事。详尽还原原始事实细节，包含涉及的涉诉、舆情信息、业务、涉案具体金额或违规事项，不作任何AI的二次加工和延伸解释]\n"
-        "5. 如果没有任何相关的风险或变动信息，请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号或多余文字。"
+        "   - 风险信息发生时间: [事件真正发生的具体日期、年份、月份，若新闻中未写明则填写“新闻未明确提及”]\n"
+        "   - 风险详细内容: [明确交代哪个主体在什么背景下发生了什么负面事件。详尽还原原始新闻中的违法、违规、通报、执行、舆情、处罚或涉诉事项]\n"
+        "5. 如果经过筛选，发现新闻全部为正常经营、正面宣传，或者没有任何相关的风险负面信息，请【必须且仅】在【风险详细内容】这列回复这7个字：未发现风险信息。绝对不能带有任何标点符号或多余文字。"
     )
     
     data = {
         "model": MODEL_NAME,
         "messages": [
-            {"role": "system", "content": "你是一个只做客观事实提炼、不输出任何主观定性、原因及后果分析的AI风控助手。"},
+            {"role": "system", "content": "你是一个只做企业负面合规风险事实提炼、不输出任何正面新闻和主观定性的AI风控助手。"},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.0
@@ -236,11 +249,11 @@ def main():
             "status": status
         })
         
-        # 🛡️ 每次请求后制动 4.5 秒，稳定绕过 GitHub 15 RPM 限制
+        # 严格的 RPM 控制，每 4.5 秒请求一次，确保 GitHub API 额度不爆
         time.sleep(4.5)
             
     bj_now = datetime.now(timezone(timedelta(hours=8)))
-    execution_time = bj_now.strftime("%H:%M")
+    execution_time = bj_now.strftime("%Y-%m-%d %H:%M")
 
     html_body = f"""
     <html>
@@ -261,7 +274,7 @@ def main():
     <body>
         <div class="container">
             <h2>每日企业风险监控整体汇总表</h2>
-            <p style="color:#666;">数据统计周期：过去30天公开信息 | 执行时间：北京时间 {execution_time}</p>
+            <p style="color:#666;"><b>数据统计周期：严格过去 30 天内公开信息</b> | 执行时间：北京时间 {execution_time}</p>
             <table>
                 <colgroup>
                     <col style="width: 8%;">
@@ -271,9 +284,9 @@ def main():
                 </colgroup>
                 <tr>
                     <th>序号</th>
-                    <th>企业全称</th>
-                    <th>所属集团全称</th>
-                    <th>风险监控状态</th>
+                    <th>企业名称</th>
+                    <th>所属集团</th>
+                    <th>风险信息</th>
                 </tr>
     """
     
