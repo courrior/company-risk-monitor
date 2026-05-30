@@ -281,7 +281,7 @@ def send_email(html_content, total_count, risk_count):
     msg = MIMEMultipart()
     msg['From'] = sender_user
     msg['To'] = receiver
-    msg['Subject'] = f"【每日风险监控】历史溯源豁免硬核版（总监控:{total_count}家 | 触网风险:{risk_count}家）"
+    msg['Subject'] = f"【每日风险监控】（总监控:{total_count}家 | 触网风险:{risk_count}家）"
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
     try:
         server = smtplib.SMTP_SSL(smtp_server, smtp_port)
