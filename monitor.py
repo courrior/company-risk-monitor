@@ -3,6 +3,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import urllib.parse
+import feedparser
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -60,16 +61,14 @@ COMPANIES = [
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
 MODEL_NAME = "gpt-4o-mini"  
 
-# 动态浏览器身份池（防反爬）
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
 ]
 
-def parse_baidu_date(date_str, bj_now):
-    """【智能核心】将百度各种时间字符串转化为标准的北京时间 datetime 对象"""
+def parse_date_universal(date_str, bj_now):
+    """通用国内媒体时间智能转换引擎"""
     date_str = date_str.strip()
     try:
         if '分钟前' in date_str:
@@ -85,127 +84,171 @@ def parse_baidu_date(date_str, bj_now):
             match_cn = re.search(r'(\d{4})年(\d{1,2})月(\d{1,2})日', date_str)
             if match_cn:
                 return datetime(int(match_cn.group(1)), int(match_cn.group(2)), int(match_cn.group(3)), tzinfo=timezone(timedelta(hours=8)))
-            match_iso = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', date_str)
+            match_iso = re.search(r'(\d{4})[-──](\d{1,2})[-──](\d{1,2})', date_str)
             if match_iso:
                 return datetime(int(match_iso.group(1)), int(match_iso.group(2)), int(match_iso.group(3)), tzinfo=timezone(timedelta(hours=8)))
     except Exception:
         pass
     return None
 
-def fetch_news_baidu_pagination(query, cutoff_date, bj_now, max_pages=3):
-    """【重大升级】：纯净百度新闻引擎，支持深度安全翻页控制"""
+def fetch_news_baidu_session(session, query, cutoff_date, bj_now, max_pages=2):
+    """【强攻绕过版】带会话保持与风控检测的百度新闻爬取"""
     encoded_query = urllib.parse.quote(query)
     articles = []
     
     for page in range(max_pages):
-        pn = page * 10  # 百度新闻每页10条，计算翻页偏移量
+        pn = page * 10
         url = f"https://www.baidu.com/s?tn=news&rtt=1&bsst=1&cl=2&wd={encoded_query}&pn={pn}"
         
-        headers = {
-            "User-Agent": random.choice(USER_AGENTS),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "zh-CN,zh;q=0.9",
-            "Referer": "https://www.baidu.com/"
-        }
-        
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            # 继承Session的合法Cookie，假装是真人在点击
+            response = session.get(url, timeout=10)
             response.encoding = 'utf-8'
+            
             if response.status_code != 200:
-                print(f"     ├─ [百度警告] 第 {page+1} 页请求被拒 (状态码: {response.status_code})，触发安全保护阻断。")
+                print(f"     ├─ ❌ [百度阻断] 状态码异常 {response.status_code}")
+                break
+                
+            if "安全验证" in response.text or "verify" in response.text:
+                print(f"     ├─ 🚨 [强攻受阻] 百度第 {page+1} 页弹出图形验证码！主动启动强攻绕过备用机制。")
                 break
                 
             soup = BeautifulSoup(response.text, 'html.parser')
             news_items = soup.select('div.result-op, div.c-container')
             
             if not news_items:
-                # 如果某一页搜出来是空的，说明百度已经没有更多新闻了，直接结束
                 break
                 
+            page_filtered = 0
             for item in news_items:
                 title_tag = item.find('h3') or item.find('a', class_=lambda x: x and 'title' in x.lower())
-                if not title_tag:
-                    continue
+                if not title_tag: continue
                 a_tag = title_tag.find('a') if title_tag.name != 'a' else title_tag
-                if not a_tag:
-                    continue
+                if not a_tag: continue
                     
                 title = a_tag.get_text(strip=True)
                 summary_tag = item.find('span', class_=lambda x: x and ('content' in x.lower() or 'summary' in x.lower())) or item.find('div', class_=lambda x: x and 'font-normal' in x.lower())
-                summary = summary_tag.get_text(strip=True) if summary_tag else item.get_text(" ", strip=True).replace(title, "").strip()
+                summary = summary_tag.get_text(strip=True) if summary_tag else ""
                 
                 item_text = item.get_text(" ")
                 date_match = re.search(r'(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}|\d+小时前|\d+天前|\d+分钟前)', item_text)
                 raw_date_str = date_match.group(1) if date_match else "近期发布"
                 
-                parsed_dt = parse_baidu_date(raw_date_str, bj_now)
-                if parsed_dt:
-                    if parsed_dt < cutoff_date:
-                        continue  # 精准过滤30天以外的历史噪音
-                    formatted_pub_date = parsed_dt.strftime("%Y年%m月%d日")
-                else:
-                    formatted_pub_date = raw_date_str
+                parsed_dt = parse_date_universal(raw_date_str, bj_now)
+                if parsed_dt and parsed_dt < cutoff_date:
+                    page_filtered += 1
+                    continue
                     
-                articles.append(f"【媒体发布时间】: {formatted_pub_date}\n标题: {title}\n摘要: {summary}\n---")
+                formatted_pub_date = parsed_dt.strftime("%Y年%m月%d日") if parsed_dt else raw_date_str
+                articles.append(f"【数据源: 百度新闻】媒体发布时间: {formatted_pub_date}\n标题: {title}\n摘要: {summary}\n---")
                 
-            # 【防反爬核心】：翻页间隔控制（看完了这一页，随机休息 2~4 秒再看下一页）
+            print(f"     ├─ [百度第 {page+1} 页] 捞出 {len(news_items)} 条，时效过滤掉 {page_filtered} 条")
+            
             if page < max_pages - 1:
                 time.sleep(random.uniform(2.0, 4.0))
                 
         except Exception as e:
-            print(f"     └─ [网络波动] 百度新闻第 {page+1} 页解析失败: {e}")
+            print(f"     └─ [百度网络波动]: {e}")
             break
             
     return articles
 
-def fetch_news(company_short, group_short):
-    """单源深度垂直抓取调度机制"""
+def fetch_news_360_backup(query, cutoff_date, bj_now):
+    """【国内保底雷达】360时效绿色新闻引擎（抗封锁、高覆盖）"""
+    encoded_query = urllib.parse.quote(query)
+    # rank=p 代表按时间最新排序
+    url = f"https://news.so.com/ns?q={encoded_query}&rank=p"
+    articles = []
+    
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Referer": "https://news.so.com/"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.encoding = 'utf-8'
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        # 360新闻标准的条目容器类名为 res-list
+        news_items = soup.select('li.res-list, div.res-list')
+        
+        filtered_count = 0
+        for item in news_items:
+            title_tag = item.find('h3')
+            if not title_tag: continue
+            a_tag = title_tag.find('a')
+            if not a_tag: continue
+            
+            title = a_tag.get_text(strip=True)
+            summary_tag = item.find('p') or item.find('span', class_='content')
+            summary = summary_tag.get_text(strip=True) if summary_tag else ""
+            
+            # 提取360新闻的发布时间
+            sitename_tag = item.find('span', class_='sitename') or item.find('span', class_='showtime')
+            raw_date_str = "近期发布"
+            if sitename_tag:
+                date_match = re.search(r'(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}|\d+小时前|\d+天前|\d+分钟前)', sitename_tag.get_text())
+                if date_match:
+                    raw_date_str = date_match.group(1)
+            
+            parsed_dt = parse_date_universal(raw_date_str, bj_now)
+            if parsed_dt and parsed_dt < cutoff_date:
+                filtered_count += 1
+                continue
+                
+            formatted_pub_date = parsed_dt.strftime("%Y年%m月%d日") if parsed_dt else raw_date_str
+            articles.append(f"【数据源: 360新闻】媒体发布时间: {formatted_pub_date}\n标题: {title}\n摘要: {summary}\n---")
+            
+        print(f"     ├─ [国内保底雷达(360新闻)] 成功捞出 {len(news_items)} 条，过滤掉过期 {filtered_count} 条")
+        return articles
+    except Exception as e:
+        print(f"     ├─ ⚠️ [国内保底雷达波动] 无法获取360新闻数据: {e}")
+        return []
+
+def fetch_news(session, company_short, group_short):
+    """【双引擎协同】百度绕过 + 360国内干货保底机制"""
     c_search = company_short.strip()
     g_search = group_short.strip()
-    
     if g_search and len(g_search) <= 2 and not g_search.endswith("集团"):
         g_search = f"{g_search}集团"
-        
-    if g_search and g_search != c_search:
-        query = f"({c_search} OR {g_search})" 
-    else:
-        query = f"{c_search}"
+    query = f"({c_search} OR {g_search})" if g_search and g_search != c_search else f"{c_search}"
         
     bj_tz = timezone(timedelta(hours=8))
     bj_now = datetime.now(bj_tz)
     cutoff_date = bj_now - timedelta(days=30)
     
-    print(f"   [百度新闻深度垂直检索] 目标关键词: '{query}'")
+    print(f"   [国内全网联合穿透] 检索主词: '{query}'")
     
-    # 执行深度翻页抓取（默认连抓前3页，你可以根据需要把 max_pages 改成 5）
-    articles_baidu = fetch_news_baidu_pagination(query, cutoff_date, bj_now, max_pages=3)
+    # ⚔️ 第一战线：带会话伪装的百度深度抓取
+    articles_baidu = fetch_news_baidu_session(session, query, cutoff_date, bj_now, max_pages=2)
     
-    # 标题深度去重
+    # 🛡️ 第二战线：抗封锁国内保底雷达（哪怕百度全被拦截返回0条，这里也会兜底抓到国内干货）
+    articles_360 = fetch_news_360_backup(query, cutoff_date, bj_now)
+    
+    # 🤝 双源大合流
+    combined = articles_baidu + articles_360
+    
+    # 语义去重（防止两边抓到重复新闻）
     seen_titles = set()
     unique_articles = []
-    for art in articles_baidu:
+    for art in combined:
         title_line = [line for line in art.split('\n') if line.startswith('标题: ')]
         if title_line:
             title_text = title_line[0].replace('标题: ', '').strip()
             norm_title = re.sub(r'[^\w]', '', title_text)[:15] 
-            if norm_title in seen_titles:
-                continue
+            if norm_title in seen_titles: continue
             seen_titles.add(norm_title)
         unique_articles.append(art)
         
-    print(f"     └─ [时效池构建完毕] 百度深度翻页共捞取 {len(unique_articles)} 条 30 天内纯净样本送审 AI")
-    return "\n".join(unique_articles)
+    final_pool = unique_articles[:100]
+    print(f"     └─ 🎯 [最终池生成] 本次穿透成功为 AI 锁定国内有效线索共: {len(final_pool)} 条")
+    return "\n".join(final_pool)
 
 def analyze_with_llm(company_full, group_full, raw_text, api_key):
-    """AI 风控清洗过滤层"""
     if not raw_text.strip():
         return "未发现风险信息"
-        
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     prompt = (
         f"你是一个专业的企业风控合规数据清洗漏斗。请对以下关于【所属集团官方全称：{group_full} | 企业官方全称：{company_full}】的网络新闻进行智能化风控筛选。\n\n"
         f"【核心筛选法则】：\n"
@@ -225,16 +268,14 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
         "   - 风险详细内容: [明确交代哪个主体在什么背景下发生了什么负面事件。详尽还原原始新闻中的现场检查细节、违规详情或涉诉事项]\n\n"
         "6. 如果发现新闻全部为正面宣传或没有任何风险信息，请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号或多余文字。"
     )
-    
     data = {
         "model": MODEL_NAME,
         "messages": [
-            {"role": "system", "content": "你是一个严谨的风控合规专家。你深知风险系统严禁出现‘时间未知’的漏洞，懂得在摘要数据不全时将公布时间作为基准时间锚定，绝不偷懒敷衍。"},
+            {"role": "system", "content": "你是一个严谨的风控合规专家。您深知风险系统严禁出现‘时间未知’的漏洞，懂得在摘要数据不全时将公布时间作为基准时间锚定，绝不偷懒敷衍。"},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.0
     }
-    
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -243,15 +284,9 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
                 res_json = response.json()
                 if 'choices' in res_json and len(res_json['choices']) > 0:
                     return res_json['choices'][0]['message']['content'].strip()
-            elif response.status_code == 429:
-                time.sleep(15)
-                continue
-            else:
-                time.sleep(5)
-                continue
+            time.sleep(5)
         except Exception:
             time.sleep(5)
-            continue
     return "监控数据获取异常（请稍后重新运行触发）"
 
 def send_email(html_content, total_count, risk_count):
@@ -262,13 +297,13 @@ def send_email(html_content, total_count, risk_count):
     receiver = os.environ.get("RECEIVER_EMAIL")
     
     if not all([sender_user, sender_pass, receiver]):
-        print("错误：邮件环境变量未配置完整，无法发送。")
+        print("邮件配置不全，跳过发送。")
         return
 
     msg = MIMEMultipart()
     msg['From'] = sender_user
     msg['To'] = receiver
-    msg['Subject'] = f"【每日风险监控】纯净百度深度表（监控:{total_count}家 | 发现风险:{risk_count}家）"
+    msg['Subject'] = f"【每日风险监控】抗封锁联合版（总监控:{total_count}家 | 拦截兜底成功风险:{risk_count}家）"
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
     
     try:
@@ -276,7 +311,7 @@ def send_email(html_content, total_count, risk_count):
         server.login(sender_user, sender_pass)
         server.sendmail(sender_user, [receiver], msg.as_string())
         server.quit()
-        print("邮件发送成功！")
+        print("邮件汇总发送成功！")
     except Exception as e:
         print(f"邮件发送失败: {e}")
 
@@ -286,22 +321,37 @@ def main():
         print("错误：未配置 AI_KEY")
         return
         
+    # ─── 核心破局点：初始化抗风控Session并提前注册Baidu通行证 ───
+    session = requests.Session()
+    ua = random.choice(USER_AGENTS)
+    session.headers.update({
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    })
+    try:
+        print("[系统初始化] 正在伪装浏览器并向百度大厅申请合法访问通行证(Cookie)...")
+        session.get("https://www.baidu.com/", timeout=5)
+        print("[初始化成功] 成功拿到百度合法访客凭证，抗封锁引擎启动。")
+    except Exception:
+        print("[初始化警告] 百度大厅连接超时，系统将强力依赖国内保底兜底引擎。")
+
     results = []
     risk_count = 0
     
-    print(f"开始执行深度监控，共 {len(COMPANIES)} 家企业...")
+    print(f"\n开始执行抗封锁全网深度监控，共 {len(COMPANIES)} 家企业...")
     for item in COMPANIES:
         comp_short = item["name"]
         comp_full = item["full_name"]
         group_short = item["group"]
         group_full = item["group_full"]
         
-        print(f"正在深度分析: {group_full} -> {comp_full}")
+        print(f"\n[监控任务展开] 正在深度穿透: {group_full} -> {comp_full}")
         
-        raw_text = fetch_news(comp_short, group_short)
+        raw_text = fetch_news(session, comp_short, group_short)
         analysis = analyze_with_llm(comp_full, group_full, raw_text, api_key)
         
-        if "监控数据获取异常" in analysis or "分析失败" in analysis:
+        if "监控数据获取异常" in analysis:
             status = "error"
         elif "未发现风险信息" in analysis:
             status = "safe"
@@ -316,9 +366,9 @@ def main():
             "status": status
         })
         
-        # 【防反爬企业间延迟】：查完一家企业，随机休息 4~8 秒，切忌死板等时
-        sleep_time = random.uniform(4.0, 8.0)
-        print(f"   [防封安全隔离] 随机静默 {sleep_time:.2f} 秒，保护本地 IP...")
+        # 仿生学非等时静默隔离，打乱机器访问死规律
+        sleep_time = random.uniform(5.0, 9.0)
+        print(f"   [仿生防封隔离] 随机静默发呆 {sleep_time:.2f} 秒，切换下一家企业...")
         time.sleep(sleep_time)
             
     bj_now = datetime.now(timezone(timedelta(hours=8)))
@@ -343,7 +393,7 @@ def main():
     <body>
         <div class="container">
             <h2>每日企业风险监控整体汇总表</h2>
-            <p style="color:#666;"><b>数据源：纯净百度新闻（多页垂直检索 | 30天时效过滤）</b> | 执行时间：北京时间 {execution_time}</p>
+            <p style="color:#666;"><b>防御模式：百度Session伪装 + 360新闻国内全方位兜底</b> | 执行时间：北京时间 {execution_time}</p>
             <table>
                 <colgroup>
                     <col style="width: 8%;">
@@ -367,7 +417,7 @@ def main():
             status_str = "发现潜在风险/变动"
             status_class = "risk-yes"
         else:
-            status_str = "监控遇到网络波动（建议重试）"
+            status_str = "大模型调用波动"
             status_class = "risk-error"
             
         html_body += f"""
@@ -405,7 +455,6 @@ def main():
     </body>
     </html>
     """
-    
     send_email(html_body, len(COMPANIES), risk_count)
 
 if __name__ == "__main__":
