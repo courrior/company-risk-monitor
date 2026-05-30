@@ -342,15 +342,15 @@ def main():
     </head>
     <body>
         <div class="container">
-            <h2>每日企业风险监控整体汇总表</h2>
-            <p><b>安全等级：最高级（已解除正文历史年份拦截，支持历史遗留风险溯源）</b> | 时间：{execution_time}</p>
+            <h2>每日企业风险监控</h2>
+            <p>时间：{execution_time}</p>
             <table>
-                <tr><th>序号</th><th>企业全称</th><th>所属集团</th><th>状态</th></tr>
+                <tr><th>序号</th><th>企业名称</th><th>所属集团</th><th>状态</th></tr>
     """
     for idx, item in enumerate(results, 1):
         s_str, s_cls = ("未发现风险信息", "risk-no") if item["status"] == "safe" else (("发现潜在风险", "risk-yes") if item["status"] == "risk" else ("数据异常", "risk-no"))
         html_body += f"<tr><td>{idx}</td><td><b>{item['full_name']}</b></td><td>{item['group_full']}</td><td class='{s_cls}'>{s_str}</td></tr>"
-    html_body += "</table><br/><h2>风险明细说明（支持历史回溯机制）</h2>"
+    html_body += "</table><br/><h2>风险信息</h2>"
     
     has_r = False
     for item in results:
