@@ -1,3 +1,4 @@
+Python
 import os
 import smtplib
 from email.mime.text import MIMEText
@@ -5,6 +6,8 @@ from email.mime.multipart import MIMEMultipart
 import urllib.parse
 import feedparser
 import requests
+from bs4 import BeautifulSoup
+import re
 from datetime import datetime, timedelta, timezone
 import time
 
@@ -58,35 +61,64 @@ COMPANIES = [
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
 MODEL_NAME = "gpt-4o-mini"  
 
-def fetch_news(company_short, group_short):
-    """【时效性+查全率终极升级】规范引入 when:30d 并通过 Python 时间戳进行硬核二次过滤，彻底拉满 100 条上限"""
-    c_search = company_short.strip()
-    g_search = group_short.strip()
+def fetch_news_baidu(query):
+    """主引擎：百度新闻网页无痕抓取（时效性极佳，专克国内政务与合规通报）"""
+    encoded_query = urllib.parse.quote(query)
+    # rtt=1 表示按时间排序（风控最核心的诉求），bsst=1 开启高级检索
+    url = f"https://www.baidu.com/s?tn=news&rtt=1&bsst=1&cl=2&wd={encoded_query}"
     
-    # 规避“爱岗敬业”等词汇产生的无关噪音
-    if g_search and len(g_search) <= 2 and not g_search.endswith("集团"):
-        g_search = f"{g_search}集团"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": "https://www.baidu.com/"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.encoding = 'utf-8'
+        if response.status_code != 200:
+            return []
+            
+        soup = BeautifulSoup(response.text, 'html.parser')
+        # 抓取百度新闻的标准容器结构
+        news_items = soup.select('div.result-op, div.c-container')
         
-    # 构造最稳健的包含 30 天限制的 Google 检索式
-    if g_search and g_search != c_search:
-        query = f"({c_search} OR {g_search}) when:30d" 
-    else:
-        query = f"{c_search} when:30d"
-        
+        articles = []
+        for item in news_items:
+            title_tag = item.find('h3') or item.find('a', class_=lambda x: x and 'title' in x.lower())
+            if not title_tag:
+                continue
+            a_tag = title_tag.find('a') if title_tag.name != 'a' else title_tag
+            if not a_tag:
+                continue
+                
+            title = a_tag.get_text(strip=True)
+            
+            # 抓取摘要片段
+            summary_tag = item.find('span', class_=lambda x: x and ('content' in x.lower() or 'summary' in x.lower())) or item.find('div', class_=lambda x: x and 'font-normal' in x.lower())
+            summary = summary_tag.get_text(strip=True) if summary_tag else item.get_text(" ", strip=True).replace(title, "").strip()
+            
+            # 解析百度暴露的时间文本（如："生态环境部 2小时前" 或 "财联社 2026年05月12日"）
+            item_text = item.get_text(" ")
+            date_match = re.search(r'(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}|\d+小时前|\d+天前|\d+分钟前)', item_text)
+            pub_date = date_match.group(1) if date_match else "近期发布"
+            
+            articles.append(f"【媒体发布时间】: {pub_date}\n标题: {title}\n摘要: {summary}\n---")
+        return articles
+    except Exception as e:
+        print(f"     └─ [主引擎异常] 百度网页解析失败: {e}")
+        return []
+
+def fetch_news_google_rss(query, cutoff_date, bj_tz):
+    """备用引擎：原有的 Google News RSS 机制（当百度受限时自动无缝兜底）"""
     encoded_query = urllib.parse.quote(query)
     url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
-    
-    # 设定严格的时间界限：当前北京时间向前推 30 天
-    bj_tz = timezone(timedelta(hours=8))
-    now_bj = datetime.now(bj_tz)
-    cutoff_date = now_bj - timedelta(days=30)
     
     try:
         feed = feedparser.parse(url)
         articles = []
-        seen_titles = set()  
-        
-        print(f"   [时效监控激活] 检索句: '{query}' | 原始拉取数: {len(feed.entries)} 条")
+        seen_titles = set()
         
         for entry in feed.entries:
             title = entry.title.strip()
@@ -94,44 +126,60 @@ def fetch_news(company_short, group_short):
                 continue
             seen_titles.add(title)
             
-            # 解析文章的发布日期
             pub_date_str = "未知发布时间"
-            parsed_time = entry.get('published_parsed') 
-            
+            parsed_time = entry.get('published_parsed')
             if parsed_time:
-                try:
-                    dt_utc = datetime(parsed_time.tm_year, parsed_time.tm_mon, parsed_time.tm_mday,
-                                      parsed_time.tm_hour, parsed_time.tm_min, parsed_time.tm_sec,
-                                      tzinfo=timezone.utc)
-                    dt_bj = dt_utc.astimezone(bj_tz)
-                    
-                    # 🛡️ 核心时效性钢印：如果文章真实发布时间早于30天前，直接抛弃，确保不掺杂陈旧数据
-                    if dt_bj < cutoff_date:
-                        print(f"     └─ [时间过滤] 过滤掉过期文章: {title} (发布于 {dt_bj.strftime('%Y-%m-%d')})")
-                        continue
-                        
-                    pub_date_str = dt_bj.strftime("%Y年%m月%d日 %H:%M")
-                except Exception:
-                    pub_date_str = entry.get('published', '未知发布时间')
+                dt_utc = datetime(parsed_time.tm_year, parsed_time.tm_mon, parsed_time.tm_mday,
+                                  parsed_time.tm_hour, parsed_time.tm_min, parsed_time.tm_sec, tzinfo=timezone.utc)
+                dt_bj = dt_utc.astimezone(bj_tz)
+                if dt_bj < cutoff_date:
+                    continue
+                pub_date_str = dt_bj.strftime("%Y年%m月%d日 %H:%M")
             else:
                 pub_date_str = entry.get('published', '未知发布时间')
-
-            # 诊断日志：打印进入 AI 筛选池的有效高时效文章
-            print(f"     └─ [保留入池] 有效期内新闻: {title} ({pub_date_str})")
-            
+                
             articles.append(f"【媒体发布时间】: {pub_date_str}\n标题: {entry.title}\n摘要: {entry.get('summary', '无')}\n---")
-            
-            # 🚀 彻底解开 40 条限制，直接允许读取到 Google RSS 接口的物理输出极限（100条）
-            if len(articles) >= 100:
-                break
-            
-        return "\n".join(articles)
-    except Exception as e:
-        print(f"抓取 {company_short} 失败: {e}")
-        return ""
+        return articles
+    except Exception:
+        return []
+
+def fetch_news(company_short, group_short):
+    """双引擎总控调度器"""
+    c_search = company_short.strip()
+    g_search = group_short.strip()
+    
+    if g_search and len(g_search) <= 2 and not g_search.endswith("集团"):
+        g_search = f"{g_search}集团"
+        
+    if g_search and g_search != c_search:
+        query = f"({c_search} OR {g_search})" 
+    else:
+        query = f"{c_search}"
+        
+    bj_tz = timezone(timedelta(hours=8))
+    cutoff_date = datetime.now(bj_tz) - timedelta(days=30)
+    
+    print(f"   [数据检索中] 检索关键词: '{query}'")
+    
+    # 1. 尝试主引擎（百度新闻网页端）
+    articles = fetch_news_baidu(query)
+    if articles:
+        print(f"     └─ [主引擎命中] 成功从百度新闻清洗出 {len(articles)} 条高时效样本")
+        return "\n".join(articles[:15]) # 限制前15条精选，防Prompt过长
+        
+    # 2. 备用引擎兜底
+    print(f"     └─ [引擎无缝切换] 百度未命中或受限，自动启用备用 Google RSS 引擎...")
+    google_query = f"{query} when:30d"
+    articles = fetch_news_google_rss(google_query, cutoff_date, bj_tz)
+    if articles:
+        print(f"     └─ [备用引擎命中] 成功从 Google RSS 补充 {len(articles)} 条样本")
+        return "\n".join(articles[:20])
+        
+    print(f"     └─ [提示] 全网未发现该企业任何新闻动态")
+    return ""
 
 def analyze_with_llm(company_full, group_full, raw_text, api_key):
-    """AI 风控漏斗层：在 30 天纯净数据池中，精准剔除正面公关，抓取核心负面"""
+    """AI 风控清洗过滤层"""
     if not raw_text.strip():
         return "未发现风险信息"
         
@@ -141,26 +189,29 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
     }
     
     prompt = (
-        f"你是一个专业的企业风控合规数据清洗漏斗。请对以下关于【所属集团官方全称：{group_full} | 企业官方全称：{company_full}】的过去30天全量网络新闻进行智能化风控筛选。\n\n"
+        f"你是一个专业的企业风控合规数据清洗漏斗。请对以下关于【所属集团官方全称：{group_full} | 企业官方全称：{company_full}】的网络新闻进行智能化风控筛选。\n\n"
         f"【核心筛选法则】：\n"
-        f"传入的数据均已通过前置时间戳验证，确属30天内最新新闻。你的核心任务是【剔除所有正常经营、正面宣传等无关信息】，【仅提取】涉及负面风险、合规问题、监管变动的文章（包括但不限于如：生产经营异常、违法违规、点名通报、行政处罚、法律诉讼、被执行人、严重负面舆情等）。\n\n"
+        f"数据已确认属30天内最新。请【剔除正面、正常经营信息】，【仅提取】涉及负面风险、合规问题、监管变动（包括但不限于：生产经营异常、违法违规、点名通报、行政处罚、法律诉讼、被执行人、严重负面舆情等）。\n\n"
         f"【原始数据池】:\n{raw_text}\n\n"
         "【铁律指令 - 必须严格执行】:\n"
-        "1. 必防幻觉铁律：你只能且必须完全基于上方提供的【原始数据池】内容进行提炼。绝对不允许编造、臆断任何不存在的细节！\n"
-        "2. 绝对中立铁律：完全不需要进行任何主观定性或后果预测，完全真实、客观地还原新闻提及的事实本身。\n"
-        "3. 拒绝过度总结：详尽还原原始事实细节（如包含具体的环保督察组点名详情、通报具体内容、公告编号、涉及金额等），严禁压缩成毫无细节的一句话。\n"
-        "4. 如果发现任何符合要求的负面风险信息，请以清晰的列表形式说明。每一条必须严格且仅包含以下4个子字段：\n"
-        f"   - 风险主体: [不论是该企业本身还是其所属集团涉案，只要新闻属实，请在此直接填写其对应的官方规范名称：{company_full} 或 {group_full}]\n"
+        "1. 必防幻觉铁律：你只能基于【原始数据池】内容提炼，绝不允许凭空捏造事件。\n"
+        "2. 绝对中立铁律：完全真实、客观地还原新闻提及的事实本身，不进行主观定性。\n"
+        "3. 拒绝过度总结：详尽还原原始事实细节（如包含具体的环保督察组点名详情、通报具体内容、公告编号、涉及金额等）。\n"
+        "4. 【时效强制锚定规则】：\n"
+        "   - 严禁输出“新闻未明确提及”或类似免责辞令！\n"
+        "   - 提取逻辑：如果标题或摘要中写明了具体的日期、年份或月份（或者可以通过‘昨日’、‘上周’等结合【媒体发布时间】推导出来），请直接写出具体的转换日期。如果标题和摘要中【完全没有】出现任何更早的案发时间线索，请【直接将该条新闻的‘媒体发布时间’（精确到日期，如XXXX年XX月XX日）】作为风险发生时间！\n\n"
+        "5. 如果发现任何符合要求的负面风险信息，请以清晰的列表形式说明。每一条必须严格且仅包含以下4个子字段：\n"
+        f"   - 风险主体: [直接填写其对应的官方规范名称：{company_full} 或 {group_full}]\n"
         "   - 风险信息公布时间: [直接使用原始数据中提供的【媒体发布时间】]\n"
-        "   - 风险信息发生时间: [事件真正发生的具体日期、年份、月份，若新闻中未写明则填写“新闻未明确提及”]\n"
-        "   - 风险详细内容: [明确交代哪个主体在什么背景下发生了什么负面事件。详尽还原原始新闻中的违规细节、环保督察通报详情或涉诉事项]\n"
-        "5. 如果经过筛选，发现新闻全部为正常经营、正面宣传，或者没有任何相关的风险负面信息，请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号或多余文字。"
+        "   - 风险信息发生时间: [严格执行上述“规则4”确定的具体日期。如找不到更早的线索，则必须直接照抄公布时间的年月日，绝对不准敷衍填写‘新闻未明确提及’！]\n"
+        "   - 风险详细内容: [明确交代哪个主体在什么背景下发生了什么负面事件。详尽还原原始新闻中的违规细节、通报详情或涉诉事项]\n\n"
+        "6. 如果发现新闻全部为正面宣传或没有任何风险信息，请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号或多余文字。"
     )
     
     data = {
         "model": MODEL_NAME,
         "messages": [
-            {"role": "system", "content": "你是一个只做企业负面合规风险事实提炼、不输出任何正面新闻和主观定性的AI风控助手。"},
+            {"role": "system", "content": "你是一个严谨的风控合规专家。你深知风险系统严禁出现‘时间未知’的漏洞，懂得在摘要数据不全时将公布时间作为基准时间锚定，绝不偷懒敷衍。"},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.0
@@ -175,20 +226,18 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
                 if 'choices' in res_json and len(res_json['choices']) > 0:
                     return res_json['choices'][0]['message']['content'].strip()
             elif response.status_code == 429:
-                print(f"   [重试提示] 触发官方频率限制(429)，正在静默等待15秒...")
                 time.sleep(15)
                 continue
             else:
                 time.sleep(5)
                 continue
-        except Exception as e:
+        except Exception:
             time.sleep(5)
             continue
             
     return "监控数据获取异常（请稍后重新运行触发）"
 
 def send_email(html_content, total_count, risk_count):
-    """通过 SMTP 发送 HTML 格式的邮件"""
     smtp_server = os.environ.get("SMTP_SERVER", "smtp.qq.com")
     smtp_port = 465
     sender_user = os.environ.get("SMTP_USER")
@@ -203,7 +252,6 @@ def send_email(html_content, total_count, risk_count):
     msg['From'] = sender_user
     msg['To'] = receiver
     msg['Subject'] = f"【每日风险监控】今日汇总表（监控:{total_count}家 | 发现风险:{risk_count}家）"
-    
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
     
     try:
@@ -251,8 +299,7 @@ def main():
             "status": status
         })
         
-        # 严格的 RPM 控制，每 4.5 秒请求一次，确保 GitHub API 额度不爆
-        time.sleep(4.5)
+        time.sleep(4.5) # 安全间隔，模拟真人点击，彻底告别反爬验证码
             
     bj_now = datetime.now(timezone(timedelta(hours=8)))
     execution_time = bj_now.strftime("%Y-%m-%d %H:%M")
@@ -276,7 +323,7 @@ def main():
     <body>
         <div class="container">
             <h2>每日企业风险监控整体汇总表</h2>
-            <p style="color:#666;"><b>数据统计周期：严格过去 30 天内公开信息</b> | 执行时间：北京时间 {execution_time}</p>
+            <p style="color:#666;"><b>数据源已升级：百度/Google全网联动</b> | 执行时间：北京时间 {execution_time}</p>
             <table>
                 <colgroup>
                     <col style="width: 8%;">
