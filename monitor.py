@@ -63,231 +63,212 @@ MODEL_NAME = "gpt-4o-mini"
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
 ]
 
-def parse_date_universal(date_str, bj_now):
-    """通用国内媒体时间智能转换引擎"""
-    date_str = date_str.strip()
+def check_publish_date_valid(raw_date_label, bj_now):
+    """【无懈可击版：动态年份补全与30天严卡机制】
+    只盘问“发布时间标签”。
+    如果不带年份，底层自动根据当前时间（2026年）动态补全并计算天数差，坚决挡住2月18日等过期数据。
+    """
+    if not raw_date_label or raw_date_label == "近期发布":
+        return True # 无法提取时间的，保守放行防漏报
+        
+    # 清理中文字符干扰
+    raw_date_label = raw_date_label.strip()
+    
+    # 1. 处理相对时间（小时前/分钟前/天前/昨天）
+    if any(keyword in raw_date_label for keyword in ["小时", "分钟", "刚", "当前"]):
+        return True
+    if "昨天" in raw_date_label:
+        return True
+    match_days_ago = re.search(r'(\d+)\s*天前', raw_date_label)
+    if match_days_ago:
+        return int(match_days_ago.group(1)) <= 30
+
+    # 提取文本中的数字（月、日、或者年、月、日）
+    numbers = [int(n) for n in re.findall(r'\d+', raw_date_label)]
+    
     try:
-        if '分钟前' in date_str:
-            m = re.search(r'(\d+)', date_str)
-            return bj_now - timedelta(minutes=int(m.group(1))) if m else bj_now
-        elif '小时前' in date_str:
-            h = re.search(r'(\d+)', date_str)
-            return bj_now - timedelta(hours=int(h.group(1))) if h else bj_now
-        elif '天前' in date_str:
-            d = re.search(r'(\d+)', date_str)
-            return bj_now - timedelta(days=int(d.group(1))) if d else bj_now
-        else:
-            match_cn = re.search(r'(\d{4})年(\d{1,2})月(\d{1,2})日', date_str)
-            if match_cn:
-                return datetime(int(match_cn.group(1)), int(match_cn.group(2)), int(match_cn.group(3)), tzinfo=timezone(timedelta(hours=8)))
-            match_iso = re.search(r'(\d{4})[-──](\d{1,2})[-──](\d{1,2})', date_str)
-            if match_iso:
-                return datetime(int(match_iso.group(1)), int(match_iso.group(2)), int(match_iso.group(3)), tzinfo=timezone(timedelta(hours=8)))
+        # 2. 如果标签自带4位年份（如 2025-12-10 或 2026年5月20日）
+        if len(numbers) >= 3 and numbers[0] >= 1000:
+            year, month, day = numbers[0], numbers[1], numbers[2]
+            target_dt = datetime(year, month, day, tzinfo=timezone(timedelta(hours=8)))
+            return (bj_now - target_dt).days <= 30
+            
+        # 3. 如果标签不带年份，只有月和日（如 05-28, 5月29日, 2月18日）
+        elif len(numbers) == 2:
+            month, day = numbers[0], numbers[1]
+            current_year = bj_now.year
+            
+            # 默认补全为今年
+            target_dt = datetime(current_year, month, day, tzinfo=timezone(timedelta(hours=8)))
+            
+            # 💡 跨年防御：如果补全今年后，发现算出来的日期比今天还大（例如现在1月，标签是12-28，那它其实是去年的）
+            if target_dt > bj_now:
+                target_dt = datetime(current_year - 1, month, day, tzinfo=timezone(timedelta(hours=8)))
+                
+            # 严卡 30 天：2月18日在这里会被算出来相差100多天，直接返回 False 拦截！
+            return (bj_now - target_dt).days <= 30
+            
     except Exception:
         pass
-    return None
-
-def fetch_news_baidu_session(session, query, cutoff_date, bj_now, max_pages=2):
-    """【强攻绕过版】带会话保持与风控检测的百度新闻爬取"""
-    encoded_query = urllib.parse.quote(query)
-    articles = []
-    
-    for page in range(max_pages):
-        pn = page * 10
-        url = f"https://www.baidu.com/s?tn=news&rtt=1&bsst=1&cl=2&wd={encoded_query}&pn={pn}"
         
-        try:
-            # 继承Session的合法Cookie，假装是真人在点击
-            response = session.get(url, timeout=10)
-            response.encoding = 'utf-8'
-            
-            if response.status_code != 200:
-                print(f"     ├─ ❌ [百度阻断] 状态码异常 {response.status_code}")
-                break
-                
-            if "安全验证" in response.text or "verify" in response.text:
-                print(f"     ├─ 🚨 [强攻受阻] 百度第 {page+1} 页弹出图形验证码！主动启动强攻绕过备用机制。")
-                break
-                
-            soup = BeautifulSoup(response.text, 'html.parser')
-            news_items = soup.select('div.result-op, div.c-container')
-            
-            if not news_items:
-                break
-                
-            page_filtered = 0
-            for item in news_items:
-                title_tag = item.find('h3') or item.find('a', class_=lambda x: x and 'title' in x.lower())
-                if not title_tag: continue
-                a_tag = title_tag.find('a') if title_tag.name != 'a' else title_tag
-                if not a_tag: continue
-                    
-                title = a_tag.get_text(strip=True)
-                summary_tag = item.find('span', class_=lambda x: x and ('content' in x.lower() or 'summary' in x.lower())) or item.find('div', class_=lambda x: x and 'font-normal' in x.lower())
-                summary = summary_tag.get_text(strip=True) if summary_tag else ""
-                
-                item_text = item.get_text(" ")
-                date_match = re.search(r'(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}|\d+小时前|\d+天前|\d+分钟前)', item_text)
-                raw_date_str = date_match.group(1) if date_match else "近期发布"
-                
-                parsed_dt = parse_date_universal(raw_date_str, bj_now)
-                if parsed_dt and parsed_dt < cutoff_date:
-                    page_filtered += 1
-                    continue
-                    
-                formatted_pub_date = parsed_dt.strftime("%Y年%m月%d日") if parsed_dt else raw_date_str
-                articles.append(f"【数据源: 百度新闻】媒体发布时间: {formatted_pub_date}\n标题: {title}\n摘要: {summary}\n---")
-                
-            print(f"     ├─ [百度第 {page+1} 页] 捞出 {len(news_items)} 条，时效过滤掉 {page_filtered} 条")
-            
-            if page < max_pages - 1:
-                time.sleep(random.uniform(2.0, 4.0))
-                
-        except Exception as e:
-            print(f"     └─ [百度网络波动]: {e}")
-            break
-            
-    return articles
+    return True # 解析出现罕见奇葩格式时，保守放行
 
-def fetch_news_360_backup(query, cutoff_date, bj_now):
-    """【国内保底雷达】360时效绿色新闻引擎（抗封锁、高覆盖）"""
+def fetch_news_google_rss(query, bj_tz, cutoff_date):
     encoded_query = urllib.parse.quote(query)
-    # rank=p 代表按时间最新排序
-    url = f"https://news.so.com/ns?q={encoded_query}&rank=p"
+    # 谷歌底层直接用 when:30d 锁死发布时间
+    url = f"https://news.google.com/rss/search?q={encoded_query}+when:30d&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
     articles = []
-    
-    headers = {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Referer": "https://news.so.com/"
-    }
-    
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.encoding = 'utf-8'
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        # 360新闻标准的条目容器类名为 res-list
-        news_items = soup.select('li.res-list, div.res-list')
-        
-        filtered_count = 0
-        for item in news_items:
-            title_tag = item.find('h3')
-            if not title_tag: continue
-            a_tag = title_tag.find('a')
-            if not a_tag: continue
-            
-            title = a_tag.get_text(strip=True)
-            summary_tag = item.find('p') or item.find('span', class_='content')
-            summary = summary_tag.get_text(strip=True) if summary_tag else ""
-            
-            # 提取360新闻的发布时间
-            sitename_tag = item.find('span', class_='sitename') or item.find('span', class_='showtime')
-            raw_date_str = "近期发布"
-            if sitename_tag:
-                date_match = re.search(r'(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}|\d+小时前|\d+天前|\d+分钟前)', sitename_tag.get_text())
-                if date_match:
-                    raw_date_str = date_match.group(1)
-            
-            parsed_dt = parse_date_universal(raw_date_str, bj_now)
-            if parsed_dt and parsed_dt < cutoff_date:
-                filtered_count += 1
-                continue
-                
-            formatted_pub_date = parsed_dt.strftime("%Y年%m月%d日") if parsed_dt else raw_date_str
-            articles.append(f"【数据源: 360新闻】媒体发布时间: {formatted_pub_date}\n标题: {title}\n摘要: {summary}\n---")
-            
-        print(f"     ├─ [国内保底雷达(360新闻)] 成功捞出 {len(news_items)} 条，过滤掉过期 {filtered_count} 条")
+        feed = feedparser.parse(url)
+        for entry in feed.entries:
+            parsed_time = entry.get('published_parsed')
+            if parsed_time:
+                dt_utc = datetime(parsed_time.tm_year, parsed_time.tm_mon, parsed_time.tm_mday,
+                                  parsed_time.tm_hour, parsed_time.tm_min, parsed_time.tm_sec, tzinfo=timezone.utc)
+                dt_bj = dt_utc.astimezone(bj_tz)
+                if dt_bj < cutoff_date: continue
+                pub_str = dt_bj.strftime("%Y年%m月%d日")
+            else:
+                pub_str = "近期发布"
+            # 💡 即使摘要里含有“2022年”，只要这里抓到了，就完整保留
+            articles.append(f"【源:谷歌】时间: {pub_str} | 标题: {entry.title} | 摘要: {entry.get('summary', '')}")
         return articles
-    except Exception as e:
-        print(f"     ├─ ⚠️ [国内保底雷达波动] 无法获取360新闻数据: {e}")
+    except Exception:
         return []
 
-def fetch_news(session, company_short, group_short):
-    """【双引擎协同】百度绕过 + 360国内干货保底机制"""
-    c_search = company_short.strip()
-    g_search = group_short.strip()
-    if g_search and len(g_search) <= 2 and not g_search.endswith("集团"):
-        g_search = f"{g_search}集团"
-    query = f"({c_search} OR {g_search})" if g_search and g_search != c_search else f"{c_search}"
+def fetch_news_baidu(session, query, bj_now):
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://www.baidu.com/s?tn=news&rtt=1&bsst=1&cl=2&wd={encoded_query}"
+    articles = []
+    try:
+        response = session.get(url, timeout=8)
+        response.encoding = 'utf-8'
+        if response.status_code != 200 or "安全验证" in response.text:
+            return []
+            
+        soup = BeautifulSoup(response.text, 'html.parser')
+        blocks = soup.find_all(['div', 'li'], class_=lambda x: x and ('result' in x or 'container' in x))
         
+        for b in blocks:
+            a_tag = b.find('a')
+            if not a_tag: continue
+            title = a_tag.get_text(strip=True)
+            if not title: continue
+            
+            # 💡 【关键修正】：必须精准剥离出“媒体发布时间区域”，不能拿包含正文的全文去乱匹配年份！
+            # 百度新闻通常把时间放在最底部的类或特定的span中，如果没有，我们用专门的窄正则只提取开头或结尾的日期标记
+            b_text = b.get_text(" ")
+            
+            # 窄提取：只找排在文本中显式呈现的日期标记（通常伴随媒体名出现）
+            date_match = re.search(r'(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}|\d+月\d+日|\d{2}-\d{2}|\d+小时前|\d+天前|\d+分钟前)', b_text)
+            raw_date_label = date_match.group(1) if date_match else "近期发布"
+            
+            # ⚡ 只卡发布时间标签！不管它摘要里写了什么2022年历史！
+            if not check_publish_date_valid(raw_date_label, bj_now):
+                continue
+                
+            articles.append(f"【源:百度】时间: {raw_date_label} | 标题: {title} | 摘要: {b_text[:150]}")
+        return articles
+    except Exception:
+        return []
+
+def fetch_news_360(query, bj_now):
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://news.so.com/ns?q={encoded_query}&rank=p"
+    articles = []
+    headers = {"User-Agent": random.choice(USER_AGENTS), "Referer": "https://news.so.com/"}
+    try:
+        response = requests.get(url, headers=headers, timeout=8)
+        response.encoding = 'utf-8'
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        items = soup.find_all(['li', 'div'], class_=lambda x: x and 'res-list' in x)
+        for item in items:
+            a_tag = item.find('h3').find('a') if item.find('h3') else item.find('a')
+            if not a_tag: continue
+            title = a_tag.get_text(strip=True)
+            
+            item_text = item.get_text(" ")
+            date_match = re.search(r'(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}|\d+月\d+日|\d{2}-\d{2}|\d+小时前|\d+天前)', item_text)
+            raw_date_label = date_match.group(1) if date_match else "近期发布"
+            
+            # ⚡ 同样只卡发布标签，对摘要内容实行100%年份免检
+            if not check_publish_date_valid(raw_date_label, bj_now):
+                continue
+                
+            articles.append(f"【源:360】时间: {raw_date_label} | 标题: {title} | 摘要: {item_text[:150]}")
+        return articles
+    except Exception:
+        return []
+
+def get_combined_raw_pool(session, comp_short, group_short):
     bj_tz = timezone(timedelta(hours=8))
     bj_now = datetime.now(bj_tz)
     cutoff_date = bj_now - timedelta(days=30)
     
-    print(f"   [国内全网联合穿透] 检索主词: '{query}'")
-    
-    # ⚔️ 第一战线：带会话伪装的百度深度抓取
-    articles_baidu = fetch_news_baidu_session(session, query, cutoff_date, bj_now, max_pages=2)
-    
-    # 🛡️ 第二战线：抗封锁国内保底雷达（哪怕百度全被拦截返回0条，这里也会兜底抓到国内干货）
-    articles_360 = fetch_news_360_backup(query, cutoff_date, bj_now)
-    
-    # 🤝 双源大合流
-    combined = articles_baidu + articles_360
-    
-    # 语义去重（防止两边抓到重复新闻）
-    seen_titles = set()
-    unique_articles = []
-    for art in combined:
-        title_line = [line for line in art.split('\n') if line.startswith('标题: ')]
-        if title_line:
-            title_text = title_line[0].replace('标题: ', '').strip()
-            norm_title = re.sub(r'[^\w]', '', title_text)[:15] 
-            if norm_title in seen_titles: continue
-            seen_titles.add(norm_title)
-        unique_articles.append(art)
+    search_queries = [comp_short, f"{comp_short} 处罚", f"{comp_short} 诉讼"]
+    if group_short and group_short != "—" and len(group_short) > 1:
+        search_queries.append(group_short)
+        search_queries.append(f"{group_short} 处罚")
+
+    all_articles = []
+    for q in list(set(search_queries)):
+        print(f"     ├─ 🚀 正在用独立关键词【{q}】向下穿透...")
+        g_res = fetch_news_google_rss(q, bj_tz, cutoff_date)
+        b_res = fetch_news_baidu(session, q, bj_now)
+        s_res = fetch_news_360(q, bj_now)
+        print(f"     │  └─ [单词锁定] 谷歌:{len(g_res)}条 | 百度:{len(b_res)}条 | 360:{len(s_res)}条")
+        all_articles.extend(g_res + b_res + s_res)
+        time.sleep(random.uniform(1.0, 1.5))
         
-    final_pool = unique_articles[:100]
-    print(f"     └─ 🎯 [最终池生成] 本次穿透成功为 AI 锁定国内有效线索共: {len(final_pool)} 条")
-    return "\n".join(final_pool)
+    seen_keys = set()
+    unique_pool = []
+    for art in all_articles:
+        match_title = re.search(r'标题:\s*(.*?)(\||\s|$)', art)
+        if match_title:
+            t_key = re.sub(r'[^\w]', '', match_title.group(1))[:12]
+            if t_key in seen_keys: continue
+            seen_keys.add(t_key)
+        unique_pool.append(art)
+        
+    print(f"     └─ 🎯 [大合流完毕] 已解除正文历史年份封锁，共向AI喂入 {len(unique_pool)} 条样本")
+    return "\n".join(unique_pool[:120])
 
 def analyze_with_llm(company_full, group_full, raw_text, api_key):
     if not raw_text.strip():
         return "未发现风险信息"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     prompt = (
-        f"你是一个专业的企业风控合规数据清洗漏斗。请对以下关于【所属集团官方全称：{group_full} | 企业官方全称：{company_full}】的网络新闻进行智能化风控筛选。\n\n"
-        f"【核心筛选法则】：\n"
-        f"输入的数据已经过Python底层语义时间戳初筛，发布时间均在30天内最新。请【剔除正面、正常经营信息】，【仅提取】涉及负面风险、合规问题、监管变动（包括但不限于：生产经营异常、违法违规、点名通报、现场检查、行政处罚、法律诉讼、被执行人、严重负面舆情等）。\n\n"
-        f"【原始数据池】:\n{raw_text}\n\n"
-        "【铁律指令 - 必须严格执行】:\n"
-        "1. 必防幻觉铁律：你只能基于【原始数据池】内容提炼，绝不允许凭空捏造事件。\n"
-        "2. 绝对中立铁律：完全真实、客观地还原新闻提及的事实本身，不进行主观定性。\n"
-        "3. 拒绝过度总结：详尽还原原始事实细节（如包含具体的环保督察组点名详情、现场检查通报具体内容、公告编号、涉及金额等）。\n"
-        "4. 【时效强制锚定规则】：\n"
-        "   - 严禁输出“新闻未明确提及”或类似免责辞令！\n"
-        "   - 提取逻辑：如果标题或摘要中写明了具体的日期、年份或月份（或者可以通过‘昨日’、‘上周’等结合【媒体发布时间】推导出来），请直接写出具体的转换日期。如果标题和摘要中【完全没有】出现任何更早的案发时间线索，请【直接将该条新闻的‘媒体发布时间’（精确到日期，如XXXX年XX月XX日）】作为风险发生时间！\n\n"
-        "5. 如果发现任何符合要求的负面风险信息，请以清晰的列表形式说明。每一条必须严格且仅包含以下4个子字段：\n"
-        f"   - 风险主体: [直接填写其对应的官方规范名称：{company_full} 或 {group_full}]\n"
-        "   - 风险信息公布时间: [直接使用原始数据中提供的【媒体发布时间】]\n"
-        "   - 风险信息发生时间: [严格执行上述“规则4”确定的具体日期。如找不到更早的线索，则必须直接照抄公布时间的年月日，绝对不准敷衍填写‘新闻未明确提及’！]\n"
-        "   - 风险详细内容: [明确交代哪个主体在什么背景下发生了什么负面事件。详尽还原原始新闻中的现场检查细节、违规详情或涉诉事项]\n\n"
-        "6. 如果发现新闻全部为正面宣传或没有任何风险信息，请【必须且仅】回复这7个字：未发现风险信息。绝对不能带有任何标点符号或多余文字。"
+        f"你是一个冷酷的企业风险筛查铁漏斗。请对以下关于【所属集团：{group_full} | 企业全称：{company_full}】的数据进行剥离。\n\n"
+        f"【核心风控铁律：允许溯源历史】\n"
+        f"这些新闻都是最近30天内刚刚发布或曝光出来的。即使新闻正文提到该风险起源于2022年、2023年或更早，只要它是由于“历史遗留问题”导致“近期爆发/被近期通报/近期列为被执行人”，这就属于【重度高危风险】！你必须立刻提取，绝不允许因为提到了历史年份而将其过滤！\n\n"
+        f"【输入样本数据】:\n{raw_text}\n\n"
+        "【输出格式要求】:\n"
+        "1. 如果有符合上述哪怕一丝风险的，必须以列表格式输出以下4个字段：\n"
+        f"   - 风险主体: {company_full} 或 {group_full}\n"
+        "   - 风险信息公布时间: 照抄文本中的时间（如XX小时前或具体日期）\n"
+        "   - 风险信息发生时间: 还原文本中提及的具体涉案起因时间（如：2022年隐患导致的近期处罚）\n"
+        "   - 风险详细内容: 详细还原事情的来龙去脉\n\n"
+        "2. 只有在样本全是空白、或者完全是正面宣传时，才能回复这7个字：未发现风险信息。"
     )
     data = {
         "model": MODEL_NAME,
         "messages": [
-            {"role": "system", "content": "你是一个严谨的风控合规专家。您深知风险系统严禁出现‘时间未知’的漏洞，懂得在摘要数据不全时将公布时间作为基准时间锚定，绝不偷懒敷衍。"},
+            {"role": "system", "content": "你是一个专业的合规审查专家，深知新近曝光的历史遗留风险比普通风险更具隐蔽性和破坏性。"},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.0
     }
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(API_URL, json=data, headers=headers)
-            if response.status_code == 200:
-                res_json = response.json()
-                if 'choices' in res_json and len(res_json['choices']) > 0:
-                    return res_json['choices'][0]['message']['content'].strip()
-            time.sleep(5)
-        except Exception:
-            time.sleep(5)
-    return "监控数据获取异常（请稍后重新运行触发）"
+    try:
+        response = requests.post(API_URL, json=data, headers=headers, timeout=30)
+        if response.status_code == 200:
+            return response.json()['choices'][0]['message']['content'].strip()
+    except Exception:
+        pass
+    return "监控数据获取异常"
 
 def send_email(html_content, total_count, risk_count):
     smtp_server = os.environ.get("SMTP_SERVER", "smtp.qq.com")
@@ -295,17 +276,13 @@ def send_email(html_content, total_count, risk_count):
     sender_user = os.environ.get("SMTP_USER")
     sender_pass = os.environ.get("SMTP_PASS")
     receiver = os.environ.get("RECEIVER_EMAIL")
-    
-    if not all([sender_user, sender_pass, receiver]):
-        print("邮件配置不全，跳过发送。")
-        return
+    if not all([sender_user, sender_pass, receiver]): return
 
     msg = MIMEMultipart()
     msg['From'] = sender_user
     msg['To'] = receiver
-    msg['Subject'] = f"【每日风险监控】抗封锁联合版（总监控:{total_count}家 | 拦截兜底成功风险:{risk_count}家）"
+    msg['Subject'] = f"【每日风险监控】历史溯源豁免硬核版（总监控:{total_count}家 | 触网风险:{risk_count}家）"
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
-    
     try:
         server = smtplib.SMTP_SSL(smtp_server, smtp_port)
         server.login(sender_user, sender_pass)
@@ -317,59 +294,34 @@ def send_email(html_content, total_count, risk_count):
 
 def main():
     api_key = os.environ.get("AI_KEY")
-    if not api_key:
-        print("错误：未配置 AI_KEY")
-        return
+    if not api_key: return
         
-    # ─── 核心破局点：初始化抗风控Session并提前注册Baidu通行证 ───
     session = requests.Session()
-    ua = random.choice(USER_AGENTS)
-    session.headers.update({
-        "User-Agent": ua,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "zh-CN,zh;q=0.9",
-    })
-    try:
-        print("[系统初始化] 正在伪装浏览器并向百度大厅申请合法访问通行证(Cookie)...")
-        session.get("https://www.baidu.com/", timeout=5)
-        print("[初始化成功] 成功拿到百度合法访客凭证，抗封锁引擎启动。")
-    except Exception:
-        print("[初始化警告] 百度大厅连接超时，系统将强力依赖国内保底兜底引擎。")
+    session.headers.update({"User-Agent": random.choice(USER_AGENTS)})
 
     results = []
     risk_count = 0
     
-    print(f"\n开始执行抗封锁全网深度监控，共 {len(COMPANIES)} 家企业...")
+    print(f"\n开始执行【发布时间硬核判定+正文年份豁免】全网监控，共 {len(COMPANIES)} 家企业...")
     for item in COMPANIES:
         comp_short = item["name"]
         comp_full = item["full_name"]
         group_short = item["group"]
         group_full = item["group_full"]
         
-        print(f"\n[监控任务展开] 正在深度穿透: {group_full} -> {comp_full}")
+        print(f"\n[任务启动] 正在扫描: {comp_full}")
         
-        raw_text = fetch_news(session, comp_short, group_short)
+        raw_text = get_combined_raw_pool(session, comp_short, group_short)
         analysis = analyze_with_llm(comp_full, group_full, raw_text, api_key)
         
-        if "监控数据获取异常" in analysis:
-            status = "error"
-        elif "未发现风险信息" in analysis:
-            status = "safe"
+        if "未发现风险信息" in analysis: status = "safe"
+        elif "监控数据获取异常" in analysis: status = "error"
         else:
             status = "risk"
             risk_count += 1
             
-        results.append({
-            "full_name": comp_full,
-            "group_full": group_full,
-            "analysis": analysis,
-            "status": status
-        })
-        
-        # 仿生学非等时静默隔离，打乱机器访问死规律
-        sleep_time = random.uniform(5.0, 9.0)
-        print(f"   [仿生防封隔离] 随机静默发呆 {sleep_time:.2f} 秒，切换下一家企业...")
-        time.sleep(sleep_time)
+        results.append({"full_name": comp_full, "group_full": group_full, "analysis": analysis, "status": status})
+        time.sleep(random.uniform(2.0, 3.5))
             
     bj_now = datetime.now(timezone(timedelta(hours=8)))
     execution_time = bj_now.strftime("%Y-%m-%d %H:%M")
@@ -378,83 +330,35 @@ def main():
     <html>
     <head>
         <style>
-            body {{ font-family: 'Helvetica Neue', Arial, sans-serif; margin: 20px; color: #333; background-color: #fafafa; }}
+            body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #fafafa; }}
             .container {{ max-width: 900px; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-            table {{ width: 100%; border-collapse: collapse; margin: 20px 0; table-layout: fixed; }}
-            th, td {{ border: 1px solid #e0e0e0; padding: 12px; text-align: left; word-break: break-all; }}
-            th {{ background-color: #f5f5f5; font-weight: bold; }}
+            table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+            th, td {{ border: 1px solid #e0e0e0; padding: 12px; text-align: left; }}
+            th {{ background-color: #f5f5f5; }}
             .risk-no {{ color: #5cb85c; font-weight: bold; }}
             .risk-yes {{ color: #d9534f; font-weight: bold; }}
-            .risk-error {{ color: #ff9800; font-weight: bold; font-style: italic; }}
-            .detail-block {{ background-color: #fff9f9; padding: 15px; border-left: 4px solid #d9534f; margin-bottom: 15px; border-radius: 0 4px 4px 0; }}
-            h2 {{ color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; }}
+            .detail-block {{ background-color: #fff9f9; padding: 15px; border-left: 4px solid #d9534f; margin-bottom: 15px; }}
         </style>
     </head>
     <body>
         <div class="container">
             <h2>每日企业风险监控整体汇总表</h2>
-            <p style="color:#666;"><b>防御模式：百度Session伪装 + 360新闻国内全方位兜底</b> | 执行时间：北京时间 {execution_time}</p>
+            <p><b>安全等级：最高级（已解除正文历史年份拦截，支持历史遗留风险溯源）</b> | 时间：{execution_time}</p>
             <table>
-                <colgroup>
-                    <col style="width: 8%;">
-                    <col style="width: 42%;">
-                    <col style="width: 28%;">
-                    <col style="width: 22%;">
-                </colgroup>
-                <tr>
-                    <th>序号</th>
-                    <th>企业全称</th>
-                    <th>所属集团全称</th>
-                    <th>风险监控状态</th>
-                </tr>
+                <tr><th>序号</th><th>企业全称</th><th>所属集团</th><th>状态</th></tr>
     """
-    
     for idx, item in enumerate(results, 1):
-        if item["status"] == "safe":
-            status_str = "未发现风险信息"
-            status_class = "risk-no"
-        elif item["status"] == "risk":
-            status_str = "发现潜在风险/变动"
-            status_class = "risk-yes"
-        else:
-            status_str = "大模型调用波动"
-            status_class = "risk-error"
-            
-        html_body += f"""
-                <tr>
-                    <td>{idx}</td>
-                    <td><b>{item["full_name"]}</b></td>
-                    <td>{item["group_full"]}</td>
-                    <td class="{status_class}">{status_str}</td>
-                </tr>
-        """
-        
-    html_body += """
-            </table>
-            <br/>
-            <h2>企业风险详细说明列表</h2>
-    """
+        s_str, s_cls = ("未发现风险信息", "risk-no") if item["status"] == "safe" else (("发现潜在风险", "risk-yes") if item["status"] == "risk" else ("数据异常", "risk-no"))
+        html_body += f"<tr><td>{idx}</td><td><b>{item['full_name']}</b></td><td>{item['group_full']}</td><td class='{s_cls}'>{s_str}</td></tr>"
+    html_body += "</table><br/><h2>风险明细说明（支持历史回溯机制）</h2>"
     
-    has_risk_detail = False
+    has_r = False
     for item in results:
         if item["status"] == "risk":
-            has_risk_detail = True
-            formatted_res = item["analysis"].replace("\n", "<br/>")
-            html_body += f"""
-                <div class="detail-block">
-                    <h3 style="color:#c9302c; margin-top:0;">{item["group_full"]} - {item["full_name"]}</h3>
-                    <p style="line-height:1.6; color:#444;">{formatted_res}</p>
-                </div>
-            """
-            
-    if not has_risk_detail:
-        html_body += "<p style='color: #5cb85c; font-size: 15px;'><b>今日所有监控企业均【未发现风险信息】。</b></p>"
-        
-    html_body += """
-        </div>
-    </body>
-    </html>
-    """
+            has_r = True
+            html_body += f"<div class='detail-block'><h3>{item['full_name']}</h3><p>{item['analysis'].replace('\n', '<br/>')}</p></div>"
+    if not has_r: html_body += "<p style='color:#5cb85c;'>今日无触网风险。</p>"
+    html_body += "</div></body></html>"
     send_email(html_body, len(COMPANIES), risk_count)
 
 if __name__ == "__main__":
