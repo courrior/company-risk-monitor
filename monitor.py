@@ -356,7 +356,8 @@ def main():
     for item in results:
         if item["status"] == "risk":
             has_r = True
-            html_body += f"<div class='detail-block'><h3>{item['full_name']}</h3><p>{item['analysis'].replace('\n', '<br/>')}</p></div>"
+            analysis_html = item['analysis'].replace('\n', '<br/>')
+            html_body += f"<div class='detail-block'><h3>{item['full_name']}</h3><p>{analysis_html}</p></div>"
     if not has_r: html_body += "<p style='color:#5cb85c;'>今日无触网风险。</p>"
     html_body += "</div></body></html>"
     send_email(html_body, len(COMPANIES), risk_count)
