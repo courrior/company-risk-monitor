@@ -19,7 +19,7 @@ jobs:
 
     - name: 安装运行依赖库
       run: |
-        pip install requests feedparser
+        pip install requests feedparser beautifulsoup4
 
     - name: 执行监控脚本并发送邮件
       env:
