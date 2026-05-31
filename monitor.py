@@ -57,13 +57,10 @@ COMPANIES = [
     {"name": "中海外", "full_name": "中海外交通建设有限公司", "group": "", "group_full": "—"}
 ]
 
-# ==================== 【2. 强攻风险关键词库（新增可配置区）】 ====================
-# 你可以在这里随意添加或删除你想重点监控的违规类型词汇。
-# 系统会自动每次挑选词汇与企业名组合，在百度和360中进行深度爆破搜索。
+# ==================== 【2. 强攻风险关键词库】 ====================
 RISK_KEYWORDS = [
-    "诉讼", "处罚", "点名", "通报", "违规", "破产", "被执行"
+    "诉讼", "处罚", "点名", "通报", "违规", "破产", "被执行", "立案", "警示"
 ]
-# ==================================================================================
 
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
 MODEL_NAME = "gpt-4o-mini"  
@@ -76,34 +73,27 @@ USER_AGENTS = [
 def check_publish_date_valid(raw_date_label, bj_now):
     if not raw_date_label or raw_date_label == "近期发布":
         return True 
-        
     raw_date_label = raw_date_label.strip()
-    
     if any(keyword in raw_date_label for keyword in ["小时", "分钟", "刚", "当前", "昨天"]):
         return True
     match_days_ago = re.search(r'(\d+)\s*天前', raw_date_label)
     if match_days_ago:
         return int(match_days_ago.group(1)) <= 30
-
     numbers = [int(n) for n in re.findall(r'\d+', raw_date_label)]
-    
     try:
         if len(numbers) >= 3 and numbers[0] >= 1000:
             year, month, day = numbers[0], numbers[1], numbers[2]
             target_dt = datetime(year, month, day, tzinfo=timezone(timedelta(hours=8)))
             return (bj_now - target_dt).days <= 30
-            
         elif len(numbers) == 2:
             month, day = numbers[0], numbers[1]
             current_year = bj_now.year
             target_dt = datetime(current_year, month, day, tzinfo=timezone(timedelta(hours=8)))
-            
             if target_dt > bj_now:
                 target_dt = datetime(current_year - 1, month, day, tzinfo=timezone(timedelta(hours=8)))
             return (bj_now - target_dt).days <= 30
     except Exception:
         pass
-        
     return True 
 
 def fetch_news_google_rss(query, bj_tz, cutoff_date):
@@ -136,23 +126,18 @@ def fetch_news_baidu(session, query, bj_now):
         response.encoding = 'utf-8'
         if response.status_code != 200 or "安全验证" in response.text:
             return []
-            
         soup = BeautifulSoup(response.text, 'html.parser')
         blocks = soup.find_all(['div', 'li'], class_=lambda x: x and ('result' in x or 'container' in x))
-        
         for b in blocks:
             a_tag = b.find('a')
             if not a_tag: continue
             title = a_tag.get_text(strip=True)
             if not title: continue
-            
             b_text = b.get_text(" ")
             date_match = re.search(r'(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}|\d+月\d+日|\d{2}-\d{2}|\d+小时前|\d+天前|\d+分钟前)', b_text)
             raw_date_label = date_match.group(1) if date_match else "近期发布"
-            
             if not check_publish_date_valid(raw_date_label, bj_now):
                 continue
-                
             articles.append(f"【源:百度】时间: {raw_date_label} | 标题: {title} | 摘要: {b_text[:150]}")
         return articles
     except Exception:
@@ -167,20 +152,16 @@ def fetch_news_360(query, bj_now):
         response = requests.get(url, headers=headers, timeout=8)
         response.encoding = 'utf-8'
         soup = BeautifulSoup(response.text, 'html.parser')
-        
         items = soup.find_all(['li', 'div'], class_=lambda x: x and 'res-list' in x)
         for item in items:
             a_tag = item.find('h3').find('a') if item.find('h3') else item.find('a')
             if not a_tag: continue
             title = a_tag.get_text(strip=True)
-            
             item_text = item.get_text(" ")
             date_match = re.search(r'(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}|\d+月\d+日|\d{2}-\d{2}|\d+小时前|\d+天前)', item_text)
             raw_date_label = date_match.group(1) if date_match else "近期发布"
-            
             if not check_publish_date_valid(raw_date_label, bj_now):
                 continue
-                
             articles.append(f"【源:360】时间: {raw_date_label} | 标题: {title} | 摘要: {item_text[:150]}")
         return articles
     except Exception:
@@ -191,18 +172,12 @@ def get_combined_raw_pool(session, comp_short, group_short):
     bj_now = datetime.now(bj_tz)
     cutoff_date = bj_now - timedelta(days=30)
     
-    # 【核心升级：动态组合防封算法】
-    # 1. 永远搜索企业基础名字（打底，保证不出错）
     search_queries = [comp_short]
-    
-    # 2. 从你配置的风险词库中，随机抽取 2 个词进行强攻穿透（防止全量搜索导致被封IP）
-    # 如果词库大于2个就抽2个，少于就全上
     sample_size = min(2, len(RISK_KEYWORDS))
     selected_risks = random.sample(RISK_KEYWORDS, sample_size)
     for risk_word in selected_risks:
         search_queries.append(f"{comp_short} {risk_word}")
 
-    # 如果有集团名，也带上1个随机风险词去爆破
     if group_short and group_short != "—" and len(group_short) > 1:
         search_queries.append(group_short)
         search_queries.append(f"{group_short} {random.choice(RISK_KEYWORDS)}")
@@ -215,7 +190,7 @@ def get_combined_raw_pool(session, comp_short, group_short):
         s_res = fetch_news_360(q, bj_now)
         print(f"     │  └─ [命中数据] 谷歌:{len(g_res)}条 | 百度:{len(b_res)}条 | 360:{len(s_res)}条")
         all_articles.extend(g_res + b_res + s_res)
-        time.sleep(random.uniform(1.2, 2.5)) # 给引擎喘息时间
+        time.sleep(random.uniform(1.2, 2.5))
         
     seen_keys = set()
     unique_pool = []
@@ -227,15 +202,16 @@ def get_combined_raw_pool(session, comp_short, group_short):
             seen_keys.add(t_key)
         unique_pool.append(art)
         
-    print(f"     └─ 🎯 [清洗合流完毕] 去重后，共向AI提交 {len(unique_pool)} 条高质量样本")
-    return "\n".join(unique_pool[:120])
+    # 【核心重构 1】：将原本发送给AI的120条上限狠狠压缩到前 25 条，极大降低Token体积，防止AI处理超时。
+    final_pool = unique_pool[:25]
+    print(f"     └─ 🎯 [清洗完毕] 已截取前 {len(final_pool)} 条最核心高密新闻提交AI")
+    return "\n".join(final_pool)
 
 def analyze_with_llm(company_full, group_full, raw_text, api_key):
     if not raw_text.strip():
         return "未发现风险信息"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     
-    # 动态把刚才的配置词塞给大模型，让它知道重点抓什么
     risk_words_str = "、".join(RISK_KEYWORDS)
     prompt = (
         f"你是一个冷酷的企业风险筛查铁漏斗。请对以下关于【所属集团：{group_full} | 企业全称：{company_full}】的数据进行剥离。\n\n"
@@ -244,7 +220,7 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
         f"【重点关注领域】：请特别留意并提取有关该企业的以下情形（包括但不限于）：{risk_words_str}。\n\n"
         f"【输入样本数据】:\n{raw_text}\n\n"
         "【输出格式要求】:\n"
-        "1. 只能基于搜索到的原文内容进行提炼，绝对不允许编造任何不存在的日期、金额或事件。\n"
+        "1. 只能基于搜索到的原文内容进行提炼，绝对不允许编造任何不存在的日期、金额或罪名。\n"
         "2. 如果有符合上述哪怕一丝风险的，必须以列表格式输出以下4个字段：\n"
         f"   - 风险主体: {company_full} 或 {group_full}\n"
         "   - 风险信息公布时间: 照抄文本中的时间（如XX小时前或具体日期）\n"
@@ -261,24 +237,31 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
         "temperature": 0.0
     }
     
-    max_retries = 4
+    # 【核心重构 2】：增加到 5 次弹性重试，且将单个请求超时从 45 秒大幅拉长到 90 秒
+    max_retries = 5
     for attempt in range(max_retries):
         try:
-            response = requests.post(API_URL, json=data, headers=headers, timeout=45)
+            response = requests.post(API_URL, json=data, headers=headers, timeout=90)
             if response.status_code == 200:
                 return response.json()['choices'][0]['message']['content'].strip()
+            
+            # 遭遇接口限流 (Rate Limit)
             elif response.status_code == 429:
-                sleep_time = 15 * (attempt + 1)
-                print(f"     └─ ⚠️ [AI 接口限流] 触发并发限制，第 {attempt + 1} 次休眠 {sleep_time} 秒后重试...")
+                sleep_time = 25 * (attempt + 1)
+                print(f"     └─ ⚠️ [AI接口限流 429] 触发免费测试通道限制，第 {attempt + 1} 次休眠 {sleep_time} 秒后重试...")
                 time.sleep(sleep_time)
             else:
-                print(f"     └─ ❌ [AI 接口报错] 异常 HTTP 状态码: {response.status_code}")
-                time.sleep(5)
+                # 【核心重构 3】：清晰打印非200的报错文本，便于直接排查是否是Token密钥失效或额度扣尽
+                print(f"     └─ ❌ [AI接口异常] HTTP状态码: {response.status_code} | 原因: {response.text[:200]}")
+                time.sleep(10)
+        except requests.exceptions.Timeout:
+            print(f"     └─ ⏳ [AI接口超时] 第 {attempt + 1} 次请求响应超过90秒，正在强行重试...")
+            time.sleep(5)
         except Exception as e:
-            print(f"     └─ ❌ [AI 网络波动] 请求异常: {e}")
+            print(f"     └─ ❌ [AI网络断开] 底层连接异常: {str(e)}")
             time.sleep(5)
             
-    return "监控数据获取异常"
+    return "AI接口异常/超时"
 
 def send_email(html_content, total_count, risk_count):
     smtp_server = os.environ.get("SMTP_SERVER", "smtp.qq.com")
@@ -304,7 +287,9 @@ def send_email(html_content, total_count, risk_count):
 
 def main():
     api_key = os.environ.get("AI_KEY")
-    if not api_key: return
+    if not api_key: 
+        print("错误：未检测到环境变量 AI_KEY，请先配置！")
+        return
         
     session = requests.Session()
     session.headers.update({"User-Agent": random.choice(USER_AGENTS)})
@@ -325,13 +310,14 @@ def main():
         analysis = analyze_with_llm(comp_full, group_full, raw_text, api_key)
         
         if "未发现风险信息" in analysis: status = "safe"
-        elif "监控数据获取异常" in analysis: status = "error"
+        elif "AI接口异常/超时" in analysis: status = "error"
         else:
             status = "risk"
             risk_count += 1
             
         results.append({"full_name": comp_full, "group_full": group_full, "analysis": analysis, "status": status})
-        time.sleep(random.uniform(2.0, 3.5))
+        # 增加企业间的休眠间隔，降低触发AI服务商RPM限流的概率
+        time.sleep(random.uniform(3.5, 6.0))
             
     bj_now = datetime.now(timezone(timedelta(hours=8)))
     execution_time = bj_now.strftime("%Y-%m-%d %H:%M")
@@ -347,20 +333,27 @@ def main():
             th {{ background-color: #f5f5f5; }}
             .risk-no {{ color: #5cb85c; font-weight: bold; }}
             .risk-yes {{ color: #d9534f; font-weight: bold; }}
+            .risk-err {{ color: #f0ad4e; font-weight: bold; }}
             .detail-block {{ background-color: #fff9f9; padding: 15px; border-left: 4px solid #d9534f; margin-bottom: 15px; }}
         </style>
     </head>
     <body>
         <div class="container">
             <h2>每日企业风险监控</h2>
-            <p>时间：{execution_time} | 附加爆破雷达模块：已开启</p>
+            <p>时间：{execution_time} | 优化版限流抗打击模块：已开启</p>
             <table>
                 <tr><th>序号</th><th>企业名称</th><th>所属集团</th><th>状态</th></tr>
     """
     for idx, item in enumerate(results, 1):
-        s_str, s_cls = ("未发现风险信息", "risk-no") if item["status"] == "safe" else (("发现潜在风险", "risk-yes") if item["status"] == "risk" else ("AI接口异常/超时", "risk-no"))
+        if item["status"] == "safe":
+            s_str, s_cls = "未发现风险信息", "risk-no"
+        elif item["status"] == "risk":
+            s_str, s_cls = "发现潜在风险", "risk-yes"
+        else:
+            s_str, s_cls = "AI接口异常/超时", "risk-err"
+            
         html_body += f"<tr><td>{idx}</td><td><b>{item['full_name']}</b></td><td>{item['group_full']}</td><td class='{s_cls}'>{s_str}</td></tr>"
-    html_body += "</table><br/><h2>风险信息</h2>"
+    html_body += "</table><br/><h2>风险信息明细</h2>"
     
     has_r = False
     for item in results:
