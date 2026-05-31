@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import time
 import random
 
+# ==================== 【1. 企业名单配置区】 ====================
 COMPANIES = [
     {"name": "海博思创", "full_name": "北京海博思创科技股份有限公司", "group": "", "group_full": "—"},
     {"name": "富力城", "full_name": "沧州富力城房地产开发有限公司", "group": "富力", "group_full": "广州富力地产股份有限公司"},
@@ -56,8 +57,9 @@ COMPANIES = [
     {"name": "中海外", "full_name": "中海外交通建设有限公司", "group": "", "group_full": "—"}
 ]
 
+# ==================== 【2. 强攻风险关键词库】 ====================
 RISK_KEYWORDS = [
-    "诉讼", "处罚", "点名", "通报", "违规", "破产", "执行", "违法"
+    "诉讼", "处罚", "抛售", "通报", "违规", "破产", "执行", "违法"
 ]
 
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
@@ -165,6 +167,7 @@ def fetch_news_360(query, bj_now):
     except Exception:
         return []
 
+# ==================== 【3. 矩阵交叉搜索引擎】 ====================
 def get_combined_raw_pool(session, comp_short, group_short):
     bj_tz = timezone(timedelta(hours=8))
     bj_now = datetime.now(bj_tz)
@@ -188,7 +191,7 @@ def get_combined_raw_pool(session, comp_short, group_short):
         
         sample_group_size = min(6, len(combined_group_queries))
         search_queries.extend(random.sample(combined_group_queries, sample_group_size))
-        
+
     search_queries = list(set(search_queries))
 
     all_articles = []
@@ -214,36 +217,54 @@ def get_combined_raw_pool(session, comp_short, group_short):
     print(f"     └─ 🎯 [清洗完毕] 成功捕获 {len(final_pool)} 条交叉高密数据送入 AI 审查")
     return "\n".join(final_pool)
 
-# ==================== 【4. 重构：AI模糊穿透审查模块】 ====================
+# ==================== 【4. 重构修复：AI模糊穿透审查模块】 ====================
 def analyze_with_llm(company_full, group_full, raw_text, api_key):
     if not raw_text.strip():
         return "未发现风险信息"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     
     risk_words_str = "、".join(RISK_KEYWORDS)
-        
+    
+    # 【核心修复点】：动态判断是否存在合法的母集团配置，完美解决 NameError 逻辑死角
+    has_group = group_full and group_full != "—" and len(group_full) > 1
+    
+    if has_group:
+        # 集团企业分支：提取核心词（如 “敬业集团有限公司” -> “敬业”）并开启穿透天眼
+        group_core = group_full.replace("有限公司", "").replace("集团", "").strip()
+        group_rule = (
+            f"【核心风控铁律：集团级模糊穿透原则】\n"
+            f"由于媒体和官方通报习惯不同，新闻中可能不会写出母集团全称‘{group_full}’。在判定关联风险时，请遵循‘核心词穿透’逻辑：\n"
+            f"只要输入的数据中，涉案主体名称包含了母集团的核心特征词‘{group_core}’（例如新闻中出现了‘营口市敬业中板公司’、‘敬业中板’等包含‘{group_core}’二字的企业），"
+            f"你必须视同该集团旗下子公司爆雷，属于本次审查的连带重大声誉与合规风险，立刻抓取还原！绝不允许因为具体子公司名称与目标企业不完全一致而将其过滤！\n\n"
+        )
+        target_desc = f"当前审查的核心目标企业是：【{company_full}】，其所属母集团为：【{group_full}】。"
+        output_example = "（如：营口市敬业中板公司）"
+    else:
+        # 独立企业分支：关闭穿透规则，聚焦独立主体本身，防止误匹配
+        group_rule = ""
+        target_desc = f"当前审查的核心目标企业是：【{company_full}】（该企业无母集团，为独立主体）。"
+        output_example = f"（如：{company_full}）"
+
     prompt = (
         f"你是一个拥有鹰眼般审视能力的企业风控专家。请对以下新闻样本进行深度合规剥离。\n"
-        f"当前审查的核心目标企业是：【{company_full}】，其所属母集团为：【{group_full}】。\n\n"
-        f"【核心风控铁律：集团级模糊穿透原则】\n"
-        f"由于媒体和官方通报习惯不同，新闻中可能不会写出母集团全称‘{group_full}’。在判定关联风险时，请遵循‘核心词穿透’逻辑：\n"
-        f"只要输入的数据中，涉案主体名称包含了母集团的核心特征词‘{group_core}’（例如新闻中出现了‘营口市敬业中板公司’、‘敬业中板’、‘乌兰浩特钢铁（敬业基地）’等包含‘{group_core}’二字的企业），"
-        f"你必须视同该集团旗下子公司爆雷，属于本次审查的连带重大声誉与合规风险，立刻抓取还原！绝不允许因为具体子公司名称与目标企业不完全一致而将其过滤！\n\n"
-        f"【重点监控情形】：{risk_words_str} 以及 违规、通报、破产、执行。\n\n"
+        f"{target_desc}\n\n"
+        f"{group_rule}"
+        f"【重点监控情形】：{risk_words_str} 以及 违规、破产、执行、抛售。\n\n"
         f"【输入样本数据】:\n{raw_text}\n\n"
         "【输出格式要求】:\n"
         "1. 只能基于搜索到的原文内容进行提炼，绝对不允许编造任何不存在的日期、金额或罪名。\n"
-        "2. 只要触发上述任何关联公司或子公司的风险，必须以下列格式输出：\n"
-        "   - 风险主体: 原文中出现的精确公司名称（如：营口市敬业中板公司）\n"
+        "2. 只要触发上述任何风险，必须以下列格式输出：\n"
+        f"   - 风险主体: 原文中出现的精确公司名称 {output_example}\n"
         "   - 风险信息公布时间: 照抄文本中的发布时间\n"
         "   - 风险信息发生时间: 原文提及的涉案起因时间（如：2022年至今累计违规生产）\n"
-        "   - 风险详细内容: 详细还原违规新增产能、被生态环境部作为典型案例通报批评的来龙去脉\n\n"
+        "   - 风险详细内容: 详细还原违规风险、被通报批评或处罚的来龙去脉\n\n"
         "3. 若无任何上述关联风险或全是正面宣传，仅回复这7个字：未发现风险信息。"
     )
+    
     data = {
         "model": MODEL_NAME,
         "messages": [
-            {"role": "system", "content": "你是一个专业的合规审查专家，深知母子公司连带声誉风险的穿透审查是合规的核心。"},
+            {"role": "system", "content": "你是一个专业的合规审查专家，深知穿透合规审查是企业防范连带声誉风险的核心。"},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.0
@@ -255,10 +276,9 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
             response = requests.post(API_URL, json=data, headers=headers, timeout=90)
             if response.status_code == 200:
                 return response.json()['choices'][0]['message']['content'].strip()
-            
             elif response.status_code == 429:
                 sleep_time = 25 * (attempt + 1)
-                print(f"     └─ ⚠️ [AI接口限流 429] 触发免费测试通道限制，第 {attempt + 1} 次休眠 {sleep_time} 秒后重试...")
+                print(f"     └─ ⚠️ [AI接口限流 429] 触发测试通道限制，第 {attempt + 1} 次休眠 {sleep_time} 秒后重试...")
                 time.sleep(sleep_time)
             else:
                 print(f"     └─ ❌ [AI接口异常] HTTP状态码: {response.status_code} | 原因: {response.text[:200]}")
@@ -272,6 +292,7 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
             
     return "AI接口异常/超时"
 
+# ==================== 【5. 邮件及核心主控流】 ====================
 def send_email(html_content, total_count, risk_count):
     smtp_server = os.environ.get("SMTP_SERVER", "smtp.qq.com")
     smtp_port = 465
@@ -283,7 +304,7 @@ def send_email(html_content, total_count, risk_count):
     msg = MIMEMultipart()
     msg['From'] = sender_user
     msg['To'] = receiver
-    msg['Subject'] = f"【每日风险监控】（公司总数:{total_count}家 | 涉及风险企业数量:{risk_count}家）"
+    msg['Subject'] = f"【每日风险监控】（总监控:{total_count}家 | 触网风险:{risk_count}家）"
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
     try:
         server = smtplib.SMTP_SSL(smtp_server, smtp_port)
@@ -325,7 +346,7 @@ def main():
             risk_count += 1
             
         results.append({"full_name": comp_full, "group_full": group_full, "analysis": analysis, "status": status})
-        time.sleep(random.uniform(3.5, 6.0)) 
+        time.sleep(random.uniform(3.5, 6.0))
             
     bj_now = datetime.now(timezone(timedelta(hours=8)))
     execution_time = bj_now.strftime("%Y-%m-%d %H:%M")
