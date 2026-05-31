@@ -11,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 import time
 import random
 
-# ==================== 【1. 企业名单配置区】 ====================
 COMPANIES = [
     {"name": "海博思创", "full_name": "北京海博思创科技股份有限公司", "group": "", "group_full": "—"},
     {"name": "富力城", "full_name": "沧州富力城房地产开发有限公司", "group": "富力", "group_full": "广州富力地产股份有限公司"},
@@ -57,9 +56,8 @@ COMPANIES = [
     {"name": "中海外", "full_name": "中海外交通建设有限公司", "group": "", "group_full": "—"}
 ]
 
-# ==================== 【2. 强攻风险关键词库】 ====================
 RISK_KEYWORDS = [
-    "诉讼", "处罚", "点名", "通报", "违规", "破产", "被执行", "立案", "警示"
+    "诉讼", "处罚", "点名", "通报", "违规", "破产", "执行", "违法"
 ]
 
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
@@ -173,24 +171,34 @@ def get_combined_raw_pool(session, comp_short, group_short):
     cutoff_date = bj_now - timedelta(days=30)
     
     search_queries = [comp_short]
+    
     sample_size = min(2, len(RISK_KEYWORDS))
     selected_risks = random.sample(RISK_KEYWORDS, sample_size)
     for risk_word in selected_risks:
         search_queries.append(f"{comp_short} {risk_word}")
 
     if group_short and group_short != "—" and len(group_short) > 1:
-        search_queries.append(group_short)
-        search_queries.append(f"{group_short} {random.choice(RISK_KEYWORDS)}")
+        anchors = ["企业", "项目", "基地"]
+        risks = ["违规", "处罚", "通报", "破产", "执行"]
+        
+        combined_group_queries = []
+        for anchor in anchors:
+            for risk in risks:
+                combined_group_queries.append(f"{group_short} {anchor} {risk}")
+        
+        sample_group_size = min(6, len(combined_group_queries))
+        search_queries.extend(random.sample(combined_group_queries, sample_group_size))
+        
+    search_queries = list(set(search_queries))
 
     all_articles = []
-    for q in list(set(search_queries)):
-        print(f"     ├─ 🚀 触发强攻关键词: 【{q}】")
+    for q in search_queries:
+        print(f"     ├─ 🚀 触发【矩阵交叉搜索】: 【{q}】")
         g_res = fetch_news_google_rss(q, bj_tz, cutoff_date)
         b_res = fetch_news_baidu(session, q, bj_now)
         s_res = fetch_news_360(q, bj_now)
-        print(f"     │  └─ [命中数据] 谷歌:{len(g_res)}条 | 百度:{len(b_res)}条 | 360:{len(s_res)}条")
         all_articles.extend(g_res + b_res + s_res)
-        time.sleep(random.uniform(1.2, 2.5))
+        time.sleep(random.uniform(1.8, 3.2))
         
     seen_keys = set()
     unique_pool = []
@@ -202,42 +210,45 @@ def get_combined_raw_pool(session, comp_short, group_short):
             seen_keys.add(t_key)
         unique_pool.append(art)
         
-    # 【核心重构 1】：将原本发送给AI的120条上限狠狠压缩到前 25 条，极大降低Token体积，防止AI处理超时。
-    final_pool = unique_pool[:25]
-    print(f"     └─ 🎯 [清洗完毕] 已截取前 {len(final_pool)} 条最核心高密新闻提交AI")
+    final_pool = unique_pool[:40]
+    print(f"     └─ 🎯 [清洗完毕] 成功捕获 {len(final_pool)} 条交叉高密数据送入 AI 审查")
     return "\n".join(final_pool)
 
+# ==================== 【4. 重构：AI模糊穿透审查模块】 ====================
 def analyze_with_llm(company_full, group_full, raw_text, api_key):
     if not raw_text.strip():
         return "未发现风险信息"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     
     risk_words_str = "、".join(RISK_KEYWORDS)
+        
     prompt = (
-        f"你是一个冷酷的企业风险筛查铁漏斗。请对以下关于【所属集团：{group_full} | 企业全称：{company_full}】的数据进行剥离。\n\n"
-        f"【核心风控铁律：允许溯源历史】\n"
-        f"这些新闻都是最近30天内刚刚发布或曝光出来的。即使新闻正文提到该风险起源于往年历史，只要它是由于历史遗留问题导致近期被爆出，这就属于【重度高危风险】！你必须立刻提取，绝不允许因为提到了历史年份而将其过滤！\n\n"
-        f"【重点关注领域】：请特别留意并提取有关该企业的以下情形（包括但不限于）：{risk_words_str}。\n\n"
+        f"你是一个拥有鹰眼般审视能力的企业风控专家。请对以下新闻样本进行深度合规剥离。\n"
+        f"当前审查的核心目标企业是：【{company_full}】，其所属母集团为：【{group_full}】。\n\n"
+        f"【核心风控铁律：集团级模糊穿透原则】\n"
+        f"由于媒体和官方通报习惯不同，新闻中可能不会写出母集团全称‘{group_full}’。在判定关联风险时，请遵循‘核心词穿透’逻辑：\n"
+        f"只要输入的数据中，涉案主体名称包含了母集团的核心特征词‘{group_core}’（例如新闻中出现了‘营口市敬业中板公司’、‘敬业中板’、‘乌兰浩特钢铁（敬业基地）’等包含‘{group_core}’二字的企业），"
+        f"你必须视同该集团旗下子公司爆雷，属于本次审查的连带重大声誉与合规风险，立刻抓取还原！绝不允许因为具体子公司名称与目标企业不完全一致而将其过滤！\n\n"
+        f"【重点监控情形】：{risk_words_str} 以及 违规、通报、破产、执行。\n\n"
         f"【输入样本数据】:\n{raw_text}\n\n"
         "【输出格式要求】:\n"
         "1. 只能基于搜索到的原文内容进行提炼，绝对不允许编造任何不存在的日期、金额或罪名。\n"
-        "2. 如果有符合上述哪怕一丝风险的，必须以列表格式输出以下4个字段：\n"
-        f"   - 风险主体: {company_full} 或 {group_full}\n"
-        "   - 风险信息公布时间: 照抄文本中的时间（如XX小时前或具体日期）\n"
-        "   - 风险信息发生时间: 还原文本中提及的具体涉案起因时间（如：2022年隐患导致的近期处罚）\n"
-        "   - 风险详细内容: 详细还原事情的来龙去脉\n\n"
-        "3. 只有在样本全是空白、或者完全是正面宣传时，才能回复这7个字：未发现风险信息。"
+        "2. 只要触发上述任何关联公司或子公司的风险，必须以下列格式输出：\n"
+        "   - 风险主体: 原文中出现的精确公司名称（如：营口市敬业中板公司）\n"
+        "   - 风险信息公布时间: 照抄文本中的发布时间\n"
+        "   - 风险信息发生时间: 原文提及的涉案起因时间（如：2022年至今累计违规生产）\n"
+        "   - 风险详细内容: 详细还原违规新增产能、被生态环境部作为典型案例通报批评的来龙去脉\n\n"
+        "3. 若无任何上述关联风险或全是正面宣传，仅回复这7个字：未发现风险信息。"
     )
     data = {
         "model": MODEL_NAME,
         "messages": [
-            {"role": "system", "content": "你是一个专业的合规审查专家，深知新近曝光的历史遗留风险比普通风险更具隐蔽性和破坏性。"},
+            {"role": "system", "content": "你是一个专业的合规审查专家，深知母子公司连带声誉风险的穿透审查是合规的核心。"},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.0
     }
     
-    # 【核心重构 2】：增加到 5 次弹性重试，且将单个请求超时从 45 秒大幅拉长到 90 秒
     max_retries = 5
     for attempt in range(max_retries):
         try:
@@ -245,13 +256,11 @@ def analyze_with_llm(company_full, group_full, raw_text, api_key):
             if response.status_code == 200:
                 return response.json()['choices'][0]['message']['content'].strip()
             
-            # 遭遇接口限流 (Rate Limit)
             elif response.status_code == 429:
                 sleep_time = 25 * (attempt + 1)
                 print(f"     └─ ⚠️ [AI接口限流 429] 触发免费测试通道限制，第 {attempt + 1} 次休眠 {sleep_time} 秒后重试...")
                 time.sleep(sleep_time)
             else:
-                # 【核心重构 3】：清晰打印非200的报错文本，便于直接排查是否是Token密钥失效或额度扣尽
                 print(f"     └─ ❌ [AI接口异常] HTTP状态码: {response.status_code} | 原因: {response.text[:200]}")
                 time.sleep(10)
         except requests.exceptions.Timeout:
@@ -274,7 +283,7 @@ def send_email(html_content, total_count, risk_count):
     msg = MIMEMultipart()
     msg['From'] = sender_user
     msg['To'] = receiver
-    msg['Subject'] = f"【每日风险监控】（总监控:{total_count}家 | 触网风险:{risk_count}家）"
+    msg['Subject'] = f"【每日风险监控】（公司总数:{total_count}家 | 涉及风险企业数量:{risk_count}家）"
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
     try:
         server = smtplib.SMTP_SSL(smtp_server, smtp_port)
@@ -316,8 +325,7 @@ def main():
             risk_count += 1
             
         results.append({"full_name": comp_full, "group_full": group_full, "analysis": analysis, "status": status})
-        # 增加企业间的休眠间隔，降低触发AI服务商RPM限流的概率
-        time.sleep(random.uniform(3.5, 6.0))
+        time.sleep(random.uniform(3.5, 6.0)) 
             
     bj_now = datetime.now(timezone(timedelta(hours=8)))
     execution_time = bj_now.strftime("%Y-%m-%d %H:%M")
@@ -340,7 +348,7 @@ def main():
     <body>
         <div class="container">
             <h2>每日企业风险监控</h2>
-            <p>时间：{execution_time} | 优化版限流抗打击模块：已开启</p>
+            <p>时间：{execution_time} | 矩阵爆破+大模型模糊穿透内核：已开启</p>
             <table>
                 <tr><th>序号</th><th>企业名称</th><th>所属集团</th><th>状态</th></tr>
     """
