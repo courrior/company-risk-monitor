@@ -11,30 +11,7 @@ from datetime import datetime, timedelta, timezone
 import time
 import random
 
-# ==================== 【1. 企业与集团风控树配置区】 ====================
-# 支持配置母集团、集团核心词、以及“不带集团名字的隐形核心关联企业”
 COMPANIES = [
-    {
-        "name": "敬业高品钢", 
-        "full_name": "河北敬业高品钢科技有限公司", 
-        "group": "敬业", 
-        "group_full": "敬业集团有限公司",
-        "affiliate_keywords": ["乌兰浩特钢铁", "英国钢铁", "敬业中板"] # 允许配置名单外、但极重要的隐形关联企业
-    },
-    {
-        "name": "敬业宽板", 
-        "full_name": "河北敬业宽板科技有限公司", 
-        "group": "敬业", 
-        "group_full": "敬业集团有限公司",
-        "affiliate_keywords": ["乌兰浩特钢铁", "英国钢铁", "敬业中板"]
-    },
-    {
-        "name": "敬业钢铁", 
-        "full_name": "敬业钢铁有限公司", 
-        "group": "敬业", 
-        "group_full": "敬业集团有限公司",
-        "affiliate_keywords": ["乌兰浩特钢铁", "英国钢铁", "敬业中板"]
-    },
     {"name": "海博思创", "full_name": "北京海博思创科技股份有限公司", "group": "", "group_full": "—", "affiliate_keywords": []},
     {"name": "富力城", "full_name": "沧州富力城房地产开发有限公司", "group": "富力", "group_full": "广州富力地产股份有限公司", "affiliate_keywords": []},
     {"name": "盛钰", "full_name": "沧州盛钰房地产开发有限公司", "group": "荣盛", "group_full": "荣盛控股股份有限公司", "affiliate_keywords": []},
@@ -67,7 +44,7 @@ COMPANIES = [
     {"name": "武安市裕华钢铁", "full_name": "武安市裕华钢铁有限公司", "group": "冀南钢铁", "group_full": "冀南钢铁集团有限公司", "affiliate_keywords": []},
     {"name": "澳森金属", "full_name": "辛集市澳森金属制品有限公司", "group": "澳森特钢", "group_full": "辛集市澳森特钢集团有限公司", "affiliate_keywords": []},
     {"name": "澳森特钢", "full_name": "辛集市澳森特钢集团有限公司", "group": "澳森特钢", "group_full": "辛集市澳森特钢集团有限公司", "affiliate_keywords": []},
-    {"name": "泽明国际", "full_name": "辛集市泽明国际贸易有限公司", "group": "", "group_full": "—", "affiliate_keywords": []},
+    {"name": "澤明国际", "full_name": "辛集市泽明国际贸易有限公司", "group": "", "group_full": "—", "affiliate_keywords": []},
     {"name": "新奥控股", "full_name": "新奥控股投资股份有限公司", "group": "廊坊市天然气", "group_full": "廊坊市天然气有限公司", "affiliate_keywords": []},
     {"name": "新奥能源", "full_name": "新奥能源供应链有限公司", "group": "廊坊市天然气", "group_full": "廊坊市天然气有限公司", "affiliate_keywords": []},
     {"name": "银盾云", "full_name": "浙江银盾云科技有限公司", "group": "京津冀润泽", "group_full": "京津冀润泽（廊坊）数字信息有限公司", "affiliate_keywords": []},
@@ -76,7 +53,7 @@ COMPANIES = [
     {"name": "中海外", "full_name": "中海外交通建设有限公司", "group": "", "group_full": "—", "affiliate_keywords": []}
 ]
 
-RISK_KEYWORDS = ["诉讼", "处罚", "抛售", "通报", "违规", "破产", "执行", "违法", "督察", "立案"]
+RISK_KEYWORDS = ["诉讼", "处罚", "减持", "通报", "违规", "破产", "执行", "违法"]
 
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
 MODEL_NAME = "gpt-4o-mini"  
@@ -112,7 +89,6 @@ def check_publish_date_valid(raw_date_label, bj_now):
         pass
     return True 
 
-# ==================== 【功能升级：高权限二级页面穿透抓取器】 ====================
 def deep_scrape_page_content(session, url):
     """
     点进重磅链接（如news.cn、gov.cn），完整抓取正文前2000字，从根本上解决摘要被截断的盲区
@@ -128,7 +104,7 @@ def deep_scrape_page_content(session, url):
             element.extract()
         full_text = soup.get_text(" ")
         clean_text = re.sub(r'\s+', ' ', full_text).strip()
-        return clean_text[:2000] # 提取前2000字深度语境
+        return clean_text[:2000] 
     except Exception:
         return ""
 
@@ -158,7 +134,6 @@ def fetch_web_baidu(session, query, bj_now):
     并入全网网页搜索通道，打破“新闻”类目限制，无条件捕获政务、通报等全量网页
     """
     encoded_query = urllib.parse.quote(query)
-    # 取消新闻分类限制(tn=news)，直接全面穿透全网网页
     url = f"https://www.baidu.com/s?wd={encoded_query}&gpc=stf%3D{int(time.time()-2592000)}%2C{int(time.time())}%7Cstftype%3D2"
     articles = []
     try:
@@ -184,14 +159,12 @@ def fetch_web_baidu(session, query, bj_now):
     except Exception:
         return []
 
-# ==================== 【3. 架构革新：全量饱和穿透式搜索引擎】 ====================
 def get_combined_raw_pool(session, comp_full, group_full, affiliate_keywords):
     bj_tz = timezone(timedelta(hours=8))
     bj_now = datetime.now(bj_tz)
     cutoff_date = bj_now - timedelta(days=30)
     
-    # 【彻底取消前端关键词拦截过滤】：直接拿企业及集团主体进行全量饱和搜索
-    search_queries = [f'"{comp_full}"'] # 用双引号确保搜索引擎精准匹配全称
+    search_queries = [f'"{comp_full}"']
     
     if group_full and group_full != "—":
         search_queries.append(f'"{group_full}"')
@@ -199,7 +172,6 @@ def get_combined_raw_pool(session, comp_full, group_full, affiliate_keywords):
         if len(group_core) > 1:
             search_queries.append(f'"{group_core}集团"')
 
-    # 动态把已知的隐形关联企业也纳入无条件饱和检索池
     for aff in affiliate_keywords:
         search_queries.append(f'"{aff}"')
 
@@ -213,7 +185,6 @@ def get_combined_raw_pool(session, comp_full, group_full, affiliate_keywords):
         raw_articles.extend(g_res + b_res)
         time.sleep(random.uniform(1.5, 2.5))
         
-    # 去重
     seen_links = set()
     unique_articles = []
     for art in raw_articles:
@@ -222,17 +193,14 @@ def get_combined_raw_pool(session, comp_full, group_full, affiliate_keywords):
         seen_links.add(link)
         unique_articles.append(art)
 
-    # 【核心升级点：权威/高危二级页面穿透】
-    # 只要链接来自中央级媒体、政务官网，或者标题含有极度可疑的模糊长文词，直接深入抓取全文
     final_text_blocks = []
     穿透计数 = 0
     
-    for art in unique_articles[:25]: # 限制前25条最相关的高密结果
+    for art in unique_articles[:25]: 
         url = art["link"]
         is_authoritative = any(domain in url for domain in ["news.cn", "gov.cn", "cctv", "people.com", "xinhuanet"])
         has_risk_clue = any(kw in art["title"] for kw in RISK_KEYWORDS)
         
-        # 满足高权威源或者含有风险线索，立刻触发“点进去读全文”的穿透机制
         if (is_authoritative or has_risk_clue) and 穿透计数 < 8:
             print(f"     │  ⚡ 触发【二级网页深度穿透】：{art['title'][:15]}... -> 正在抓取正文")
             full_context = deep_scrape_page_content(session, url)
@@ -244,10 +212,9 @@ def get_combined_raw_pool(session, comp_full, group_full, affiliate_keywords):
         block = f"【源:{art['source']}】| 时间: {art['time']} | 标题: {art['title']} | 链接: {url} | 文本内容: {art['summary']}"
         final_text_blocks.append(block)
         
-    print(f"     └─ 🎯 [深度清洗完毕] 成功捕获 {len(final_text_blocks)} 条『穿透级高密富文本』送入 AI 终审")
+    print(f"     └─ 🎯 成功捕获 {len(final_text_blocks)} 条富文本数据送入 AI 审理")
     return "\n".join(final_text_blocks)
 
-# ==================== 【4. AI合规熔炉模块（后端严审）】 ====================
 def analyze_with_llm(company_full, group_full, affiliate_keywords, raw_text, api_key):
     if not raw_text.strip():
         return "未发现风险信息"
@@ -256,7 +223,6 @@ def analyze_with_llm(company_full, group_full, affiliate_keywords, raw_text, api
     risk_words_str = "、".join(RISK_KEYWORDS)
     group_core = group_full.replace("有限公司", "").replace("集团", "").strip() if (group_full and group_full != "—") else ""
     
-    # 构造极度严苛的穿透审查Prompt：前端放开，后端由AI做最严密的面审
     prompt = (
         f"你是一个拥有顶级鹰眼合规审视能力的企业风控与反洗钱专家。请对以下全网捕获的穿透富文本进行严密审计。\n"
         f"【核心审计目标】：\n"
@@ -296,16 +262,14 @@ def analyze_with_llm(company_full, group_full, affiliate_keywords, raw_text, api
                 return response.json()['choices'][0]['message']['content'].strip()
             elif response.status_code == 429:
                 sleep_time = 25 * (attempt + 1)
-                print(f"     └─ ⚠️ [AI接口限流 429] 休眠 {sleep_time} 秒后重试...")
                 time.sleep(sleep_time)
             else:
                 time.sleep(10)
-        except Exception as e:
+        except Exception:
             time.sleep(5)
             
     return "AI接口异常/超时"
 
-# ==================== 【5. 邮件及核心主控流】 ====================
 def send_email(html_content, total_count, risk_count):
     smtp_server = os.environ.get("SMTP_SERVER", "smtp.qq.com")
     smtp_port = 465
@@ -317,14 +281,14 @@ def send_email(html_content, total_count, risk_count):
     msg = MIMEMultipart()
     msg['From'] = sender_user
     msg['To'] = receiver
-    msg['Subject'] = f"【每日深度风控天网监控】（总监控:{total_count}家 | 拦截风险:{risk_count}家）"
+    msg['Subject'] = f"【每日风险信息监测】（企业总数:{total_count}家 | 发现风险信息:{risk_count}家）"
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
     try:
         server = smtplib.SMTP_SSL(smtp_server, smtp_port)
         server.login(sender_user, sender_pass)
         server.sendmail(sender_user, [receiver], msg.as_string())
         server.quit()
-        print("合规天网邮件发送成功！")
+        print("邮件发送成功！")
     except Exception as e:
         print(f"邮件发送失败: {e}")
 
@@ -340,20 +304,14 @@ def main():
     results = []
     risk_count = 0
     
-    print(f"\n开始执行合规深度天网扫描，共 {len(COMPANIES)} 家企业...")
+    print(f"\n开始执行合规深度扫描，共 {len(COMPANIES)} 家企业...")
     for item in COMPANIES:
-        comp_short = item["name"]
         comp_full = item["full_name"]
-        group_short = item["group"]
         group_full = item["group_full"]
         affiliate_keywords = item.get("affiliate_keywords", [])
         
-        print(f"\n[任务启动] 正在执行全天候深度穿透扫描: {comp_full}")
-        
-        # 饱和检索与网页穿透
+        print(f"\n[任务启动] 正在扫描: {comp_full}")
         raw_text = get_combined_raw_pool(session, comp_full, group_full, affiliate_keywords)
-        
-        # AI 后端合规全量面审
         analysis = analyze_with_llm(comp_full, group_full, affiliate_keywords, raw_text, api_key)
         
         if "未发现风险信息" in analysis: status = "safe"
@@ -385,21 +343,21 @@ def main():
     </head>
     <body>
         <div class="container">
-            <h2>每日企业合规风险监控 (2.0 穿透天网版)</h2>
-            <p>时间：{execution_time} | 全量网页饱和扫描+二级正文深度穿透：已全面开启</p>
+            <h2>每日企业合规风险监控结果报告</h2>
+            <p>时间：{execution_time} | 全量饱和检索 + 网页深度二级穿透已全面启动</p>
             <table>
-                <tr><th>序号</th><th>企业名称</th><th>所属集团</th><th>合规状态</th></tr>
+                <tr><th>序号</th><th>企业名称</th><th>所属集团</th><th>风险信息</th></tr>
     """
     for idx, item in enumerate(results, 1):
         if item["status"] == "safe":
             s_str, s_cls = "未发现风险信息", "risk-no"
         elif item["status"] == "risk":
-            s_str, s_cls = "发现潜在合规风险（点下方明细查看）", "risk-yes"
+            s_str, s_cls = "发现潜在合规风险（见下方明细）", "risk-yes"
         else:
             s_str, s_cls = "AI接口异常/超时", "risk-err"
             
         html_body += f"<tr><td>{idx}</td><td><b>{item['full_name']}</b></td><td>{item['group_full']}</td><td class='{s_cls}'>{s_str}</td></tr>"
-    html_body += "</table><br/><h2>风险信息穿透披露明细</h2>"
+    html_body += "</table><br/><h2>风险穿透审计明细</h2>"
     
     has_r = False
     for item in results:
@@ -407,7 +365,7 @@ def main():
             has_r = True
             analysis_html = item['analysis'].replace('\n', '<br/>')
             html_body += f"<div class='detail-block'><h3>{item['full_name']}</h3><p>{analysis_html}</p></div>"
-    if not has_r: html_body += "<p style='color:#5cb85c;'>今日合规天网内未发现任何触网风险。</p>"
+    if not has_r: html_body += "<p style='color:#5cb85c;'>今日名单内所有企业均未发现触发合规风控红线。</p>"
     html_body += "</div></body></html>"
     send_email(html_body, len(COMPANIES), risk_count)
 
